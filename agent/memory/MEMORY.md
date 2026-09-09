@@ -6,6 +6,6 @@ file, never here.
 
 Read the topic file when the run needs it. Do not assume its contents from the line below.
 
-- [Brand voice](brand-voice.md) — tone, vocabulary, approved and banned claims
-- [Brief samples](brief-samples.md) — real briefs previously sent to creators; the house register
-- [Hook patterns](hook-patterns.md) — hook taxonomy, what has been tested, what is retired
+- [Brand voice](brand-voice.md) — Hugl product facts, approved phrasing, claims needing sign-off
+- [Brief samples](brief-samples.md) — three approved scripts sent to creators, verbatim; the house register
+- [Hook patterns](hook-patterns.md) — hook taxonomy observed on this account, plus the house script skeleton

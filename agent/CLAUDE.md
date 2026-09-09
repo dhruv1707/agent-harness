@@ -5,7 +5,7 @@ loaded on every run, so keep it short — detail belongs in `memory/` topic file
 
 ## The account
 
-- **Brand:** _(fill in)_
+- **Brand:** Hugl — U-shaped cooling body pillow, DTC
 - **Primary efficiency metric:** _(fill in — e.g. blended ROAS, CAC, MER)_
 - **Default lookback window:** 7 days
 - **Data sources:** Triple Whale (performance), Atria (creative library and competitive)
