@@ -71,11 +71,31 @@ def test_cacheable_prefix_is_byte_identical_across_runs():
     assert first.stable_text == second.stable_text
     assert first.volatile_text != second.volatile_text
 
-    # And the wire shape: cache_control on the stable block only.
-    blocks = first.blocks()
-    assert len(blocks) == 2
-    assert blocks[0]["cache_control"] == {"type": "ephemeral"}
-    assert "cache_control" not in blocks[1]
+    # And the wire shape: system_instruction carries only the stable side.
+    assert first.system_instruction == first.stable_text
+    assert "run-a" not in first.system_instruction
+    assert "2026-01-01" not in first.system_instruction
+
+
+def test_volatile_context_rides_in_contents_not_system_instruction():
+    """The breakpoint is a boundary between two request fields, not a marker."""
+    prompt = build_effective_system_prompt(
+        run_context=RunContext(run_id="run-a", today="2026-01-01"),
+        append="Extra instruction.",
+    )
+    contents = prompt.contents("Write today's scripts.")
+
+    assert len(contents) == 1
+    assert contents[0]["role"] == "user"
+
+    texts = [part["text"] for part in contents[0]["parts"]]
+    assert "run-a" in texts[0]
+    assert "Extra instruction." in texts[0]
+    assert texts[-1] == "Write today's scripts."
+
+    # Nothing volatile may appear on the cached side.
+    for volatile in ("run-a", "2026-01-01", "Extra instruction."):
+        assert volatile not in prompt.system_instruction
 
 
 def test_entrypoint_truncates_at_the_line_cap():

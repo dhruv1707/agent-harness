@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "An AI creative strategist harness: top ads -> hooks -> iteration briefs"
 requires-python = ">=3.10"
 dependencies = [
-    "anthropic>=0.70",
+    "google-genai>=1.0",
 ]
 
 [project.optional-dependencies]

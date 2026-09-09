@@ -8,6 +8,10 @@ invariants hold, and `tests/test_prompt.py` enforces both:
    even then governance, the memory index and `append` survive.
 2. The cacheable prefix is byte-identical across runs. Everything that varies per run lives
    after the cache breakpoint.
+
+The breakpoint is a boundary, not a marker. On Gemini the stable side becomes
+`system_instruction` (implicitly cached once it clears the model's token floor — see
+`config.cache_floor`) and the volatile side rides at the front of the user turn.
 """
 
 from __future__ import annotations
@@ -79,7 +83,11 @@ class RunContext:
 
 @dataclass(frozen=True)
 class AssembledPrompt:
-    """The assembled control plane, inspectable and wire-ready."""
+    """The assembled control plane, inspectable and wire-ready.
+
+    Deliberately free of SDK imports: it emits plain dicts and strings so the control
+    plane stays testable without a network or a provider.
+    """
 
     layers: list[Layer]
 
@@ -99,18 +107,27 @@ class AssembledPrompt:
     def volatile_text(self) -> str:
         return "\n\n".join(layer.text for layer in self.volatile_layers)
 
-    def blocks(self) -> list[dict]:
-        """The `system` argument for messages.create — cache breakpoint included."""
-        wire: list[dict] = [
-            {
-                "type": "text",
-                "text": self.stable_text,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ]
+    @property
+    def system_instruction(self) -> str:
+        """The `system_instruction` for generate_content.
+
+        Byte-identical across runs, which is what makes it cacheable. Nothing volatile
+        may appear here — that is the whole point of the breakpoint.
+        """
+        return self.stable_text
+
+    def contents(self, user_message: str) -> list[dict]:
+        """The `contents` for generate_content.
+
+        Gemini has a single system_instruction field and no inline cache breakpoint, so
+        the volatile run context rides at the front of the user turn instead. The
+        stable/volatile split survives; only the mechanism changes.
+        """
+        parts: list[dict] = []
         if self.volatile_text:
-            wire.append({"type": "text", "text": self.volatile_text})
-        return wire
+            parts.append({"text": self.volatile_text})
+        parts.append({"text": user_message})
+        return [{"role": "user", "parts": parts}]
 
 
 def truncate_entrypoint_content(content: str) -> str:
