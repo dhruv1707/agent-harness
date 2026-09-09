@@ -120,7 +120,7 @@ def main() -> int:
     show.add_argument("--raw", action="store_true", help="Print the request JSON only.")
     show.add_argument("--system-prompt-file", type=Path, help="Override the default stack.")
     show.add_argument("--append-system-prompt", help="Appended last, after the breakpoint.")
-    show.add_argument("--custom-system-prompt", help="A job description; extends the stack.")
+    show.add_argument("--agent-system-prompt", help="A role description; extends the stack.")
     show.add_argument("--model", default=MODEL, help=f"Default: {MODEL}")
     show.add_argument("--window", default="last 7 days")
     show.add_argument("--metric", default=None)
@@ -143,7 +143,7 @@ def main() -> int:
             sources=tuple(args.source),
         ),
         override=override,
-        custom=args.custom_system_prompt,
+        agent=args.agent_system_prompt,
         append=args.append_system_prompt,
     )
 

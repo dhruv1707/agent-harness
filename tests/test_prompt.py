@@ -38,14 +38,14 @@ def test_append_cannot_remove_any_default_layer():
     assert prompt.layers[-1].cacheable is False, "append must sit after the breakpoint"
 
 
-def test_custom_extends_rather_than_displaces():
-    prompt = build_effective_system_prompt(custom="You are the hook-classification pass.")
+def test_agent_role_extends_rather_than_displaces():
+    prompt = build_effective_system_prompt(agent="You are the hook-classification pass.")
 
     assert names(prompt)[: len(DEFAULT_NAMES)] == DEFAULT_NAMES
-    assert "custom" in names(prompt)
+    assert "agent" in names(prompt)
     # It lands after the default stack but before governance.
-    assert names(prompt).index("custom") == len(DEFAULT_NAMES)
-    assert names(prompt).index("custom") < names(prompt).index("governance")
+    assert names(prompt).index("agent") == len(DEFAULT_NAMES)
+    assert names(prompt).index("agent") < names(prompt).index("governance")
 
 
 def test_override_displaces_the_stack_but_not_governance_or_append():

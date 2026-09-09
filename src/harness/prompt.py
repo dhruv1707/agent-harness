@@ -3,7 +3,7 @@
 The system prompt is built from ordered layers with an explicit precedence structure. Two
 invariants hold, and `tests/test_prompt.py` enforces both:
 
-1. A job description extends the constitution; it cannot wipe it. `custom` and `append` are
+1. A role description extends the constitution; it cannot wipe it. `agent` and `append` are
    strictly additive. Only an explicit `override` displaces the default layer stack, and
    even then governance, the memory index and `append` survive.
 2. The cacheable prefix is byte-identical across runs. Everything that varies per run lives
@@ -169,7 +169,7 @@ def build_effective_system_prompt(
     agent_dir: Path = AGENT_DIR,
     run_context: RunContext | None = None,
     override: str | None = None,
-    custom: str | None = None,
+    agent: str | None = None,
     append: str | None = None,
 ) -> AssembledPrompt:
     """Assemble the system prompt in precedence order.
@@ -180,7 +180,10 @@ def build_effective_system_prompt(
         override: Replaces the default layer stack. Governance, the memory index and
             `append` still apply — an override narrows the constitution, it does not
             abolish it.
-        custom: A job description appended after the default stack. Never replaces it.
+        agent: A role/job description layered on top of the stack. Never replaces it.
+            Note this follows Claude Code's *proactive-mode* agent semantics (append,
+            don't replace). Claude Code's own `custom` slot replaces the base wholesale
+            — that behaviour is what `override` above provides here.
         append: Always last, always after the cache breakpoint.
     """
     run_context = run_context or RunContext()
@@ -192,9 +195,9 @@ def build_effective_system_prompt(
     else:
         layers.extend(load_default_layers(agent_dir))
 
-    # 5. A job description extends; it does not displace.
-    if custom:
-        layers.append(Layer("custom", custom.strip(), True, "<custom>"))
+    # 5. A role description extends; it does not displace.
+    if agent:
+        layers.append(Layer("agent", agent.strip(), True, "<agent>"))
 
     # 6-7. Governance and the memory index are never displaced.
     layers.append(
