@@ -109,25 +109,29 @@ class AssembledPrompt:
 
     @property
     def system_instruction(self) -> str:
-        """The `system_instruction` for generate_content.
+        """The `system_instruction` for the interaction.
 
         Byte-identical across runs, which is what makes it cacheable. Nothing volatile
         may appear here — that is the whole point of the breakpoint.
         """
         return self.stable_text
 
-    def contents(self, user_message: str) -> list[dict]:
-        """The `contents` for generate_content.
+    def initial_input(self, user_message: str) -> dict:
+        """The `user_input` step that opens a turn.
 
-        Gemini has a single system_instruction field and no inline cache breakpoint, so
-        the volatile run context rides at the front of the user turn instead. The
-        stable/volatile split survives; only the mechanism changes.
+        The Interactions API takes a single `system_instruction` and no inline cache
+        breakpoint, so the volatile run context rides at the front of the user turn
+        instead. The stable/volatile split survives; only the mechanism changes.
+
+        Attaching the run context to each *new* user turn — rather than once per session —
+        means a branch taken on a different day gets a fresh, correct run context instead
+        of inheriting a stale date from the node it forked off.
         """
-        parts: list[dict] = []
+        blocks: list[dict] = []
         if self.volatile_text:
-            parts.append({"text": self.volatile_text})
-        parts.append({"text": user_message})
-        return [{"role": "user", "parts": parts}]
+            blocks.append({"type": "text", "text": self.volatile_text})
+        blocks.append({"type": "text", "text": user_message})
+        return {"type": "user_input", "content": blocks}
 
 
 def truncate_entrypoint_content(content: str) -> str:

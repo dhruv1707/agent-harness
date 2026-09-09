@@ -1,15 +1,19 @@
-"""Inspect the control plane: `harness prompt`."""
+"""Command line: inspect the control plane, run the loop, read the transcript."""
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import sys
 from pathlib import Path
 
-from .config import MODEL, cache_floor
+from .config import MAX_TURNS, MODEL, cache_floor
+from .events import ToolCallReady, ToolCallStarted
 from .prompt import AssembledPrompt, RunContext, build_effective_system_prompt
+from .session import AgentSession
+from .transcript import Transcript
 
 RULE = "=" * 78
 
@@ -24,6 +28,9 @@ def _explain(exc: Exception) -> str:
         if isinstance(value, str) and value:
             return value
     return f"{type(exc).__name__}: {text[:160]}"
+
+
+# ---- harness prompt ----------------------------------------------------------
 
 
 class _Counter:
@@ -64,7 +71,7 @@ class _Counter:
         return f"{count:,} tok"
 
 
-def _render(prompt: AssembledPrompt, counter: _Counter) -> None:
+def _render_prompt(prompt: AssembledPrompt, counter: _Counter) -> None:
     print(RULE)
     print(f" CACHEABLE PREFIX — system_instruction, stable across runs  [{counter.model}]")
     print(RULE)
@@ -74,7 +81,7 @@ def _render(prompt: AssembledPrompt, counter: _Counter) -> None:
         if not layer.cacheable and not marked:
             print()
             print("-" * 78)
-            print(" ^^^ CACHE BREAKPOINT — below here rides in contents, never cached ^^^")
+            print(" ^^^ CACHE BREAKPOINT — below here rides in the user turn, never cached ^^^")
             print("-" * 78)
             marked = True
         print()
@@ -112,25 +119,7 @@ def _render(prompt: AssembledPrompt, counter: _Counter) -> None:
     print(RULE)
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(prog="harness")
-    sub = parser.add_subparsers(dest="command", required=True)
-
-    show = sub.add_parser("prompt", help="Assemble and inspect the system prompt.")
-    show.add_argument("--raw", action="store_true", help="Print the request JSON only.")
-    show.add_argument("--system-prompt-file", type=Path, help="Override the default stack.")
-    show.add_argument("--append-system-prompt", help="Appended last, after the breakpoint.")
-    show.add_argument("--agent-system-prompt", help="A role description; extends the stack.")
-    show.add_argument("--model", default=MODEL, help=f"Default: {MODEL}")
-    show.add_argument("--window", default="last 7 days")
-    show.add_argument("--metric", default=None)
-    show.add_argument("--run-id", default="inspect")
-    show.add_argument("--source", action="append", default=[], help="Repeatable.")
-    show.add_argument("--message", default="Write today's scripts.", help="Sample user turn.")
-    show.add_argument("--no-tokens", action="store_true", help="Skip the count_tokens calls.")
-
-    args = parser.parse_args()
-
+def _cmd_prompt(args) -> int:
     override = None
     if args.system_prompt_file:
         override = args.system_prompt_file.read_text(encoding="utf-8")
@@ -153,14 +142,133 @@ def main() -> int:
                 {
                     "model": args.model,
                     "system_instruction": prompt.system_instruction,
-                    "contents": prompt.contents(args.message),
+                    "input": [prompt.initial_input(args.message)],
+                    "store": False,
+                    "stream": True,
                 },
                 indent=2,
             )
         )
     else:
-        _render(prompt, _Counter(enabled=not args.no_tokens, model=args.model))
+        _render_prompt(prompt, _Counter(enabled=not args.no_tokens, model=args.model))
     return 0
+
+
+# ---- harness run -------------------------------------------------------------
+
+
+def _cmd_run(args) -> int:
+    try:
+        if args.resume:
+            session = AgentSession.resume(
+                args.resume,
+                from_node=args.from_node,
+                model=args.model,
+                max_turns=args.max_turns,
+            )
+        else:
+            session = AgentSession.create(model=args.model, max_turns=args.max_turns)
+    except (FileNotFoundError, KeyError) as exc:
+        print(f"[error] {exc}", file=sys.stderr)
+        return 1
+
+    where = f" from {args.from_node}" if args.from_node else ""
+    print(
+        f"[session {session.session_id}]{where}  model={session.model}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+    def on_text(chunk: str) -> None:
+        print(chunk, end="", flush=True)
+
+    def on_event(event) -> None:
+        if isinstance(event, ToolCallStarted):
+            print(f"\n  · {event.name} …", file=sys.stderr, flush=True)
+        elif isinstance(event, ToolCallReady):
+            args_preview = json.dumps(event.arguments)[:120]
+            print(f"  → {event.name}({args_preview})", file=sys.stderr, flush=True)
+
+    try:
+        result = asyncio.run(
+            session.submit(
+                args.task,
+                on_text=None if args.quiet else on_text,
+                on_event=on_event,
+            )
+        )
+    except KeyboardInterrupt:
+        print("\n[interrupted]", file=sys.stderr)
+        return 130
+
+    print()
+    usage = f" usage={result.usage}" if result.usage else ""
+    print(f"[{result.stop_reason}] turns={result.turns}{usage}", file=sys.stderr)
+    if result.error:
+        print(f"[error] {result.error}", file=sys.stderr)
+    print(
+        f"[transcript] harness transcript {session.session_id}",
+        file=sys.stderr,
+    )
+    return 0 if result.stop_reason == "end_turn" else 1
+
+
+# ---- harness transcript ------------------------------------------------------
+
+
+def _cmd_transcript(args) -> int:
+    try:
+        transcript = Transcript.load(args.session_id)
+    except FileNotFoundError as exc:
+        print(f"[error] {exc}", file=sys.stderr)
+        return 1
+    print(transcript.render())
+    return 0
+
+
+# ---- entry point -------------------------------------------------------------
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="harness")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    show = sub.add_parser("prompt", help="Assemble and inspect the system prompt.")
+    show.add_argument("--raw", action="store_true", help="Print the request JSON only.")
+    show.add_argument("--system-prompt-file", type=Path, help="Override the default stack.")
+    show.add_argument("--append-system-prompt", help="Appended last, after the breakpoint.")
+    show.add_argument("--agent-system-prompt", help="A role description; extends the stack.")
+    show.add_argument("--model", default=MODEL, help=f"Default: {MODEL}")
+    show.add_argument("--window", default="last 7 days")
+    show.add_argument("--metric", default=None)
+    show.add_argument("--run-id", default="inspect")
+    show.add_argument("--source", action="append", default=[], help="Repeatable.")
+    show.add_argument("--message", default="Write today's scripts.", help="Sample user turn.")
+    show.add_argument("--no-tokens", action="store_true", help="Skip the count_tokens calls.")
+    show.set_defaults(fn=_cmd_prompt)
+
+    run = sub.add_parser("run", help="Run the query loop against a task.")
+    run.add_argument("task", help="What the agent should do.")
+    run.add_argument("--resume", metavar="SESSION", help="Continue an existing session.")
+    run.add_argument(
+        "--from",
+        dest="from_node",
+        metavar="NODE",
+        help="Branch from this node instead of the head. Requires --resume.",
+    )
+    run.add_argument("--model", default=MODEL, help=f"Default: {MODEL}")
+    run.add_argument("--max-turns", type=int, default=MAX_TURNS)
+    run.add_argument("-q", "--quiet", action="store_true", help="Suppress streamed text.")
+    run.set_defaults(fn=_cmd_run)
+
+    tree = sub.add_parser("transcript", help="Render a session's node tree.")
+    tree.add_argument("session_id")
+    tree.set_defaults(fn=_cmd_transcript)
+
+    args = parser.parse_args()
+    if getattr(args, "from_node", None) and not getattr(args, "resume", None):
+        parser.error("--from requires --resume")
+    return args.fn(args)
 
 
 if __name__ == "__main__":

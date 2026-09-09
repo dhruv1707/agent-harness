@@ -67,6 +67,18 @@ def cache_floor(model: str = MODEL) -> int | None:
 MAX_ENTRYPOINT_LINES = 200
 MAX_ENTRYPOINT_BYTES = 25_000
 
+#: Hard rail on the query loop. A loop with no ceiling is a billing incident.
+MAX_TURNS = int(os.environ.get("HARNESS_MAX_TURNS", "20"))
+
+#: How many concurrency-safe tools may run at once. Unsafe tools always run alone.
+MAX_PARALLEL_TOOLS = int(os.environ.get("HARNESS_MAX_PARALLEL_TOOLS", "8"))
+
+#: Per-tool wall clock. A hung tool must not hang the ledger.
+TOOL_TIMEOUT_SECONDS = float(os.environ.get("HARNESS_TOOL_TIMEOUT", "120"))
+
+#: Session transcripts, one JSONL file per session.
+RUNS_DIR = ROOT / "runs"
+
 TRUNCATION_NOTICE = (
     "> [index truncated: it exceeded its line or byte cap] Entries were cut from the end "
     "of this index. Read the topic files in `agent/memory/` directly rather than assuming "
