@@ -174,6 +174,11 @@ async def query_loop(
                         turn=state.turn,
                     )
                     executor.submit(event)
+                    # Yield to the event loop so the task submit() just created can
+                    # actually begin. Without this, buffered SSE events are iterated
+                    # without ever suspending, and no tool body starts until the stream
+                    # ends — which would make mid-stream dispatch purely notional.
+                    await asyncio.sleep(0)
 
                 elif isinstance(event, StreamError):
                     stream_error = event.message

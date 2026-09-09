@@ -263,3 +263,68 @@ def test_thought_steps_are_replayed_in_the_next_request():
     replayed = client.requests[1]["input"]
     assert replayed[0]["type"] == "thought"
     assert replayed[0]["signature"] == "SIG123"
+
+
+def test_tool_body_starts_before_the_stream_finishes():
+    """Mid-stream dispatch must actually execute mid-stream.
+
+    submit() only creates a task; without an explicit yield the event loop never gets
+    control while buffered events are iterated, so every tool body would wait for the
+    stream to end. A live timeline caught that; this pins it.
+
+    Events are tagged per turn: turn 2's stream would otherwise always log after the
+    tool body and make this assertion vacuous.
+    """
+    log: list[str] = []
+
+    @tool(concurrency_safe=True)
+    async def watched() -> str:
+        """Records when its body actually begins."""
+        log.append("TOOL_BODY_START")
+        return "ok"
+
+    class LoggingStream(FakeStream):
+        def __init__(self, events, label):
+            super().__init__(events)
+            self.label = label
+
+        def __aiter__(self):
+            async def gen():
+                for i, event in enumerate(self._events):
+                    log.append(f"{self.label}_event_{i}")
+                    yield event
+
+            return gen()
+
+    class LoggingInteractions(FakeInteractions):
+        turn = 0
+
+        async def create(self, **kwargs):
+            self.requests.append(kwargs)
+            LoggingInteractions.turn += 1
+            return LoggingStream(self._turns.pop(0), f"t{LoggingInteractions.turn}")
+
+    client = FakeClient([])
+    client.aio.interactions = LoggingInteractions(
+        [
+            [*tool_call(0, "c1", "watched", "{}"), text("trailing"), done()],
+            [text("finished"), done()],
+        ],
+        client.requests,
+    )
+
+    asyncio.run(
+        query_loop(
+            LoopState(transcript=Transcript("s-midstream")),
+            client=client,
+            prompt=prompt(),
+            registry=ToolRegistry([watched]),
+        )
+    )
+
+    assert "TOOL_BODY_START" in log, "the tool never ran"
+    turn_one = [i for i, e in enumerate(log) if e.startswith("t1_event_")]
+    assert log.index("TOOL_BODY_START") < max(turn_one), (
+        f"tool body waited for turn 1's stream to finish — mid-stream dispatch is "
+        f"not working. log={log}"
+    )
