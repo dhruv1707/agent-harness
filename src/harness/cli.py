@@ -13,6 +13,20 @@ from .prompt import AssembledPrompt, RunContext, build_effective_system_prompt
 RULE = "=" * 78
 
 
+def _explain(exc: Exception) -> str:
+    """Say what actually went wrong, not just the exception class."""
+    # The SDK resolves credentials at request time, so a missing key arrives
+    # here as a TypeError rather than at construction.
+    if "authentication" in str(exc).lower():
+        return "no API credentials — set ANTHROPIC_API_KEY or run `ant auth login`"
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        message = body.get("error", {}).get("message")
+        if message:
+            return str(message)
+    return f"count_tokens failed ({type(exc).__name__})"
+
+
 class _Counter:
     """Real token counts when credentials exist, byte counts when they don't."""
 
@@ -40,15 +54,8 @@ class _Counter:
             )
             return f"~{result.input_tokens:,} tok"
         except Exception as exc:
-            # The SDK only resolves credentials at request time, so a missing key
-            # surfaces here as a TypeError rather than at construction.
-            reason = (
-                "no API credentials — set ANTHROPIC_API_KEY or run `ant auth login`"
-                if "authentication" in str(exc).lower()
-                else f"count_tokens failed ({type(exc).__name__})"
-            )
             self.client = None
-            self.note = f"{reason}; showing bytes"
+            self.note = f"{_explain(exc)}; showing bytes"
             return f"{len(text.encode('utf-8')):,} B"
 
 
