@@ -32,7 +32,7 @@ _load_dotenv(ROOT / ".env")
 #: The strategist's control plane — prompt layers, governance, memory.
 AGENT_DIR = ROOT / "agent"
 
-MODEL = os.environ.get("HARNESS_MODEL", "gemini-2.5-pro")
+MODEL = os.environ.get("HARNESS_MODEL", "gemini-3.8-flash")
 
 #: Minimum prompt-prefix size before a model will cache it at all. Below the floor the
 #: stable prefix is re-billed in full on every run and the cache breakpoint buys nothing.
