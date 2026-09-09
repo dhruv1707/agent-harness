@@ -97,11 +97,12 @@ class AgentSession:
         self.transcript.append(prompt.initial_input(message), turn=0)
 
         state = LoopState(transcript=self.transcript)
-        client = self.client or make_client()
+        if self.client is None:
+            self.client = make_client()
 
         return await query_loop(
             state,
-            client=client,
+            client=self.client,
             prompt=prompt,
             registry=self.registry,
             model=self.model,

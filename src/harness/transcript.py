@@ -189,19 +189,39 @@ class Transcript:
 
     # ---- rendering -----------------------------------------------------------
 
+    def annotate(self, node_id: str | None = None) -> list[tuple[str, Node]]:
+        """The path, each node labelled `submission.turn`.
+
+        `Node.turn` is the query loop's own counter and restarts at every submission, so
+        on a path that crosses a resume or a branch it repeats — two turn-1s in a row,
+        which reads as nonsense. The submission number is derived here by counting
+        `user_input` boundaries along the path rather than stored on the node: a stored
+        global counter would be wrong the moment two branches share a prefix.
+        """
+        labelled: list[tuple[str, Node]] = []
+        submission = 0
+        for node in self.path_to_root(node_id):
+            if node.kind == "user_input":
+                submission += 1
+            labelled.append((f"{submission}.{node.turn}", node))
+        return labelled
+
     def render(self) -> str:
         """An indented tree, marking the head and any branch points."""
         lines = [f"session {self.session_id}  ({len(self)} nodes)"]
 
-        def walk(node: Node, depth: int) -> None:
+        def walk(node: Node, depth: int, submission: int) -> None:
+            if node.kind == "user_input":
+                submission += 1
             marker = " <- HEAD" if node.id == self.head else ""
             fork = "  *branch*" if self.is_branch_point(node.id) else ""
             lines.append(
-                f"{'  ' * depth}{node.id}  [{node.kind}] {node.summary()}{fork}{marker}"
+                f"{'  ' * depth}{submission}.{node.turn}  {node.id}  "
+                f"[{node.kind}] {node.summary()}{fork}{marker}"
             )
             for child in self.children(node.id):
-                walk(child, depth + 1)
+                walk(child, depth + 1, submission)
 
         for root in self.roots():
-            walk(root, 1)
+            walk(root, 1, 0)
         return "\n".join(lines)

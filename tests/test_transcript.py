@@ -103,3 +103,33 @@ def test_render_marks_head_and_branch_points():
     assert "<- HEAD" in output
     assert "*branch*" in output
     assert output.count("\n") >= 3
+
+
+def test_annotate_numbers_submissions_across_a_branch():
+    """Node.turn restarts per submission; the submission number must not."""
+    t = Transcript("s-turns")
+    t.append(user("first ask"))          # submission 1
+    t.append(model("answer"), turn=1)
+    fork = t.head
+
+    t.append(user("second ask"))         # submission 2, turn resets to 0
+    t.append(model("answer two"), turn=1)
+
+    labels = [label for label, _node in t.annotate()]
+    assert labels == ["1.0", "1.1", "2.0", "2.1"]
+
+    # And on the other branch, the second submission is still submission 2.
+    t.branch_from(fork)
+    t.append(user("alternative ask"))
+    t.append(model("answer three"), turn=1)
+    assert [label for label, _ in t.annotate()] == ["1.0", "1.1", "2.0", "2.1"]
+
+
+def test_render_shows_submission_and_turn():
+    t = Transcript("s-render-turns")
+    t.append(user("q"))
+    t.append(model("a"), turn=1)
+
+    output = t.render()
+    assert "1.0" in output
+    assert "1.1" in output
