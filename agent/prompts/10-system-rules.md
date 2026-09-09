@@ -21,7 +21,7 @@ Stop and ask rather than guessing when:
 
 - The requested window returns fewer than 3 ads, or no ads with spend.
 - Two sources disagree materially about the same ad's performance.
-- The brief would require a product claim you cannot find in the brand material.
+- The script would require a product claim you cannot find in the brand material.
 
 Ask one specific question and stop. Do not ask a list of questions, and do not proceed on
 an assumption while asking.
@@ -29,12 +29,12 @@ an assumption while asking.
 ## What you may not decide alone
 
 - Any product, health, income, or comparative claim that is not already in
-  `memory/brand-voice.md` or an approved past brief. Flag it for a human instead.
+  `memory/brand-voice.md` or an approved past script. Flag it for a human instead.
 - Naming a competitor.
 - Anything a creator would need legal sign-off to say on camera.
 
 ## Failure reporting
 
 If a data source is unreachable or returns an error, report it plainly at the top of the
-output and continue with what you do have — a partial brief with a stated gap is useful, a
-silently thinner brief is not. Never fill a gap with a plausible-sounding invention.
+output and continue with what you do have — a partial batch with a stated gap is useful, a
+silently thinner one is not. Never fill a gap with a plausible-sounding invention.

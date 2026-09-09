@@ -12,11 +12,11 @@ loaded on every run, so keep it short — detail belongs in `memory/` topic file
 
 ## Working agreements
 
-- Briefs go to creators, not to the client. Write for the person holding the camera.
-- One pattern per batch. A batch of briefs that tests five unrelated ideas teaches nothing.
+- Scripts go to creators, not to the client. Write for the person holding the camera.
+- One pattern per batch. A batch of scripts that tests five unrelated ideas teaches nothing.
 - A hook we have already iterated on twice with no lift is retired — check
   `memory/hook-patterns.md` before briefing it again.
-- Claims that are not already approved get flagged, never written into a brief.
+- Claims that are not already approved get flagged, never written into a script.
 
 ## Conventions
 

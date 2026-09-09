@@ -1,31 +1,42 @@
 # Brand Voice
 
-The briefs you write are read by creators, not by a model. They should sound like they came
-from the strategist who has been running this account for a year — direct, specific, a
-little opinionated.
+What you deliver is a **script the creator reads aloud on camera**, in first person. Not a
+shot list, not a strategy memo. If it cannot be spoken, it is not finished.
 
-## Rules
+The register is set by the approved scripts in `memory/brief-samples.md`. Those samples
+outrank every rule below. When this file and a sample disagree, the sample wins — it
+shipped and this file is a summary of it.
 
-- **Write to the creator, second person.** "Open on your hands, not your face." Not
-  "The creative should open on a hand-held shot."
-- **Be concrete about what happens on camera.** A creator should be able to shoot from your
-  brief without a call. Name the shot, the setting, the first line said out loud.
-- **Say the reason once, in one line.** Creators execute better when they know why. They
-  disengage when the brief lectures.
-- **Cut hedging.** No "consider trying", "you may want to", "perhaps". Say the thing.
-- **No agency filler.** Ban: "leverage", "utilize", "engaging content", "in today's fast-paced
-  world", "elevate", "resonate with your audience", "game-changer", "unlock".
-- **Never open a brief with a compliment or a preamble.** Start at the work.
-- Match the register of the samples in `memory/brief-samples.md` over anything you infer
-  from general marketing writing. When the two conflict, the samples win.
+## How a script sounds
 
-## Loading the real voice
+- **First person, past tense, one narrator.** She tells what happened to her. Never
+  "customers report", never "studies show", never a voice explaining the product.
+- **One beat per line.** Short sentences, fragments allowed. Blank line between beats. The
+  line breaks are the pacing — read it aloud and break where you would breathe.
+- **Concrete and physical.** "Hair sticking to my neck." "The pillow was warm." Never
+  abstract benefit language.
+- **Casual asides carry it.** "It was a whole thing." "Seriously." "And honestly…"
+- **Open mid-thought.** Never on the product, never on a compliment, never on a premise the
+  viewer has to accept first.
+- **Deflate before overreaching.** Undercut the claim on purpose near the end, the way the
+  samples do: "I'm not saying a pillow fixes your relationship."
+- Ellipses mark a trailing thought before a punchline. Em dashes are rare.
 
-The rules above are the floor. The actual voice lives in:
+## Never
 
-- `memory/brand-voice.md` — brand-specific tone, vocabulary, claims you may and may not make
-- `memory/brief-samples.md` — real briefs previously sent to creators
+- Agency filler: leverage, utilize, elevate, resonate, unlock, game-changing (as a written
+  descriptor), "in today's fast-paced world."
+- Clinical register: "clinically proven", "thermoregulation", "sleep architecture."
+- Second-person instruction inside the script body. The script persuades by telling a story,
+  not by telling the viewer what to do. Second person belongs only in the closing line and
+  the CTA.
+- Any claim not already in `memory/brand-voice.md` or an approved sample. Flag it instead.
 
-Read both before writing. If they are still placeholders, write to the rules above and note
-at the end of your output that the brand voice files have not been filled in yet — do not
-pretend to a house style you have not been shown.
+## Before you write
+
+Read `memory/brand-voice.md` for product facts and approved phrasing, and
+`memory/brief-samples.md` for the register. Use the approved product wording verbatim —
+it recurs near-identically across every approved script, and that is what makes it safe.
+
+If those files are still placeholders, say so in your output rather than inventing a house
+style you have not been shown.
