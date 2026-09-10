@@ -12,6 +12,7 @@ from pathlib import Path
 from .config import MAX_TURNS, MODEL, cache_floor
 from .events import ToolCallReady, ToolCallStarted
 from .prompt import AssembledPrompt, RunContext, build_effective_system_prompt
+from .mcp import MCPBridge, load_servers
 from .session import AgentSession
 from .transcript import Transcript
 
@@ -192,17 +193,34 @@ def _cmd_run(args) -> int:
             args_preview = json.dumps(event.arguments)[:120]
             print(f"  → {event.name}({args_preview})", file=sys.stderr, flush=True)
 
-    try:
-        result = asyncio.run(
-            session.submit(
-                args.task,
-                on_text=None if args.quiet else on_text,
-                on_event=on_event,
+    async def go():
+        servers = [s for s in load_servers(args.mcp_config) if s.enabled]
+        if args.no_mcp or not servers:
+            if servers and args.no_mcp:
+                print("[mcp] disabled by --no-mcp", file=sys.stderr)
+            return await session.submit(
+                args.task, on_text=None if args.quiet else on_text, on_event=on_event
             )
-        )
+
+        # Bridged, not declared natively: these tools must pass the permission gate.
+        async with MCPBridge(servers=servers) as bridge:
+            discovered = await bridge.discover()
+            for entry in discovered:
+                session.registry.register(entry)
+            names = ", ".join(sorted(bridge.clients)) or "none"
+            print(f"[mcp] {len(discovered)} tools from {names}", file=sys.stderr)
+            return await session.submit(
+                args.task, on_text=None if args.quiet else on_text, on_event=on_event
+            )
+
+    try:
+        result = asyncio.run(go())
     except KeyboardInterrupt:
         print("\n[interrupted]", file=sys.stderr)
         return 130
+    except Exception as exc:
+        print(f"[error] {_explain(exc)}", file=sys.stderr)
+        return 1
 
     print()
     usage = f" usage={result.usage}" if result.usage else ""
@@ -214,6 +232,50 @@ def _cmd_run(args) -> int:
         file=sys.stderr,
     )
     return 0 if result.stop_reason == "end_turn" else 1
+
+
+# ---- harness mcp -------------------------------------------------------------
+
+
+def _cmd_mcp(args) -> int:
+    """Connect (running OAuth if needed) and print what each server offers.
+
+    Run this once per server to sign in, and to learn the real tool names before writing
+    permission rules for them.
+    """
+    servers = [s for s in load_servers(args.mcp_config) if s.enabled]
+    if args.server:
+        servers = [s for s in servers if s.name == args.server]
+    if not servers:
+        print("[error] no matching enabled servers in agent/mcp.toml", file=sys.stderr)
+        return 1
+
+    async def go() -> int:
+        async with MCPBridge(servers=servers) as bridge:
+            tools = await bridge.discover()
+            for name in sorted(bridge.clients):
+                owned = [t for t in tools if t.name.startswith(f"mcp__{name}__")]
+                print(f"\n{name}  ({len(owned)} tools)")
+                for entry in sorted(owned, key=lambda t: t.name):
+                    safe = "parallel" if entry.concurrency_safe else "serial  "
+                    first_line = entry.description.splitlines()[0] if entry.description else ""
+                    print(f"  {safe}  {entry.name}")
+                    if first_line:
+                        print(f"            {first_line[:88]}")
+            print(
+                "\nTools with no read-only hint run serially. Add rules for these names "
+                "to agent/permissions.toml — unmatched tools fall to the policy default.",
+                file=sys.stderr,
+            )
+        return 0
+
+    try:
+        return asyncio.run(go())
+    except KeyboardInterrupt:
+        return 130
+    except Exception as exc:
+        print(f"[error] {_explain(exc)}", file=sys.stderr)
+        return 1
 
 
 # ---- harness transcript ------------------------------------------------------
@@ -272,8 +334,21 @@ def main() -> int:
         action="store_true",
         help="Approve every 'ask' without prompting. For unattended runs; think first.",
     )
+    run.add_argument(
+        "--mcp-config", type=Path, default=None, help="Default: agent/mcp.toml"
+    )
+    run.add_argument(
+        "--no-mcp", action="store_true", help="Skip MCP servers for this run."
+    )
     run.add_argument("-q", "--quiet", action="store_true", help="Suppress streamed text.")
     run.set_defaults(fn=_cmd_run)
+
+    mcp_cmd = sub.add_parser("mcp", help="Connect to MCP servers and list their tools.")
+    mcp_cmd.add_argument(
+        "server", nargs="?", help="Only this server. Default: every enabled one."
+    )
+    mcp_cmd.add_argument("--mcp-config", type=Path, default=None)
+    mcp_cmd.set_defaults(fn=_cmd_mcp)
 
     tree = sub.add_parser("transcript", help="Render a session's node tree.")
     tree.add_argument("session_id")

@@ -1,0 +1,22 @@
+# MCP servers the agent connects to.
+#
+# The harness is the MCP client, deliberately. Gemini can declare an MCP server natively
+# and call it server-side, but those calls execute at Google and reach us only after the
+# fact — the permission gate never gets a vote. Bridged here, every remote tool is an
+# ordinary local tool: same permissions, same concurrency rules, same ledger.
+#
+# Tools are registered as mcp__<server>__<tool>, which is what the wildcard patterns in
+# permissions.toml match against.
+
+[servers.triplewhale]
+url = "https://mcp.triplewhale.com/v1/mcp"
+# OAuth2 is read-only (moby:read), needs no key, and can be revoked. Triple Whale
+# recommends it over the API key wherever the client supports it — we do.
+# To use a key instead: auth = "header", header_name = "x-api-key",
+# api_key_env = "TRIPLEWHALE_API_KEY"
+auth = "oauth"
+
+[servers.atria]
+url = "https://api.tryatria.com/mcp"
+# Atria's MCP server is OAuth 2.1 only. The X-API-Key on their site is for the REST API.
+auth = "oauth"

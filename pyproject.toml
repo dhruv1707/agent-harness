@@ -5,6 +5,7 @@ description = "An AI creative strategist harness: top ads -> hooks -> iteration 
 requires-python = ">=3.10"
 dependencies = [
     "google-genai>=1.0",
+    "mcp>=2.0",
 ]
 
 [project.optional-dependencies]

@@ -23,3 +23,21 @@ ask = [
 # Never, whatever the model argues. Nothing yet — this fills in as tools arrive that
 # should exist for reading but never for acting.
 deny = []
+
+# ---------------------------------------------------------------------------
+# MCP tools (Triple Whale, Atria)
+#
+# Bridged tools are named mcp__<server>__<tool>, and patterns take a trailing *.
+# They are deliberately NOT listed yet: run `harness mcp` to sign in and print the
+# real tool names, then add rules here. Until you do they fall to default = "ask",
+# which prompts in a terminal and denies in an unattended run. That is the intended
+# failure mode — a tool nobody has reviewed should not reach a live ad account.
+#
+# Once you know the names, the shape is roughly:
+#
+#   allow = [..., "mcp__triplewhale__get_*", "mcp__atria__search_*"]
+#   ask   = [..., "mcp__atria__generate_*"]
+#   deny  = ["mcp__*__delete_*"]
+#
+# Remember precedence: deny beats ask beats allow, so a broad deny on writes stays
+# safe even if a later allow pattern is too generous.

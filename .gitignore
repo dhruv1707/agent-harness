@@ -7,3 +7,6 @@ venv/
 .env
 runs/
 .DS_Store
+
+# OAuth tokens for MCP servers — credentials, never commit
+.mcp-auth/
