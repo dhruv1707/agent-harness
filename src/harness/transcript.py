@@ -139,6 +139,39 @@ class Transcript:
         self._persist(node)
         return node
 
+    def compact_boundary(
+        self,
+        summary: str,
+        retained: list[Node],
+        meta: dict | None = None,
+    ) -> Node:
+        """Replace the walked history with a summary, without destroying anything.
+
+        The boundary is appended as a **new root** — its parent is None — so walking from
+        the new head yields the summary plus the retained steps and nothing else. The whole
+        pre-compaction branch stays in the file, still renderable and still branchable from;
+        `compacted_from` records the link the parent pointer no longer carries.
+
+        This is what the tree buys us: compaction is non-destructive by construction rather
+        than by keeping a separate archive.
+        """
+        previous_head = self.head
+        self.head = None  # the next append has no parent, so it starts a new root
+
+        boundary = self.append(
+            {"type": "user_input", "content": [{"type": "text", "text": summary}]},
+            turn=0,
+            meta={
+                "compact_boundary": True,
+                "compacted_from": previous_head,
+                "retained": len(retained),
+                **(meta or {}),
+            },
+        )
+        for node in retained:
+            self.append(node.step, turn=node.turn, meta={"retained_from": node.id})
+        return boundary
+
     def branch_from(self, node_id: str) -> Node:
         """Move the head back. The next append becomes a sibling, not a continuation."""
         node = self.get(node_id)
@@ -215,6 +248,8 @@ class Transcript:
                 submission += 1
             marker = " <- HEAD" if node.id == self.head else ""
             fork = "  *branch*" if self.is_branch_point(node.id) else ""
+            if node.meta.get("compact_boundary"):
+                fork += "  *COMPACTED*"
             lines.append(
                 f"{'  ' * depth}{submission}.{node.turn}  {node.id}  "
                 f"[{node.kind}] {node.summary()}{fork}{marker}"

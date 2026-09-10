@@ -79,6 +79,69 @@ TOOL_TIMEOUT_SECONDS = float(os.environ.get("HARNESS_TOOL_TIMEOUT", "120"))
 #: Session transcripts, one JSONL file per session.
 RUNS_DIR = ROOT / "runs"
 
+
+# ---- context governance ------------------------------------------------------
+#
+# The model's window is 1,048,576 tokens and a full daily run peaks around 82k — 8%.
+# Computing the threshold from the hardware limit would put it near 1,015,000 and it
+# would never fire. So the budget is a *policy* number: every input token is billed on
+# every turn and long context degrades attention. Capacity does not justify consumption.
+
+CONTEXT_BUDGET_TOKENS = int(os.environ.get("HARNESS_CONTEXT_BUDGET", "120000"))
+
+#: Reserved so the summarization call itself has room to answer.
+MAX_OUTPUT_TOKENS_FOR_SUMMARY = 20_000
+
+#: Early-warning headroom below the budget — warnings, errors, a manual compact.
+AUTOCOMPACT_BUFFER_TOKENS = 13_000
+
+#: Circuit breaker. "You may fail, but you may not fail infinitely without memory."
+MAX_CONSECUTIVE_COMPACT_FAILURES = 3
+
+#: Share of the most recent steps kept verbatim through a compaction.
+KEEP_RECENT_SHARE = 0.20
+
+
+def compact_threshold(budget: int | None = None) -> int:
+    """Context size at which compaction should run, in tokens.
+
+    Normally budget minus the two reserves. A small budget — the ones used to force
+    compaction in testing — would otherwise go negative, since the reserves total 33,000,
+    and a negative threshold fires on turn one before there is anything to compact. Below
+    that point the threshold falls back to half the budget, which keeps the reserves
+    proportional instead of nonsensical.
+    """
+    budget = CONTEXT_BUDGET_TOKENS if budget is None else budget
+    return max(budget - MAX_OUTPUT_TOKENS_FOR_SUMMARY - AUTOCOMPACT_BUFFER_TOKENS, budget // 2)
+
+
+# ---- session memory ----------------------------------------------------------
+#
+# Note the two 12,000s below are unrelated. The first is *when* the brief is first
+# written; the second is *how large* it may grow. Same number, different meaning.
+
+#: No brief at all below this — there is nothing worth compressing yet.
+SESSION_MEMORY_FIRST_WRITE_TOKENS = 12_000
+
+#: Context growth since the last write before an update is considered.
+SESSION_MEMORY_UPDATE_INTERVAL = 5_000
+
+#: Tool calls since the last write that count as "real work has happened".
+SESSION_MEMORY_MIN_TOOL_CALLS = 3
+
+#: Per-section and whole-brief size caps.
+MAX_SECTION_TOKENS = 2_000
+MAX_SESSION_MEMORY_TOKENS = 12_000
+
+
+def approx_tokens(text: str) -> int:
+    """Rough token count at 4 chars/token.
+
+    Deliberately an estimate: budgets are enforced per section on every write, and a
+    `count_tokens` round trip per section would cost more than the precision is worth.
+    """
+    return len(text) // 4
+
 TRUNCATION_NOTICE = (
     "> [index truncated: it exceeded its line or byte cap] Entries were cut from the end "
     "of this index. Read the topic files in `agent/memory/` directly rather than assuming "

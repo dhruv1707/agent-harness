@@ -16,7 +16,13 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from .config import MAX_TURNS, MODEL
+from .compaction import is_prompt_too_long, plan_cut, summarize
+from .config import (
+    MAX_CONSECUTIVE_COMPACT_FAILURES,
+    MAX_TURNS,
+    MODEL,
+    compact_threshold,
+)
 from .events import (
     StreamDone,
     StreamError,
@@ -30,6 +36,7 @@ from .events import (
 from .executor import StreamingToolExecutor
 from .permissions import PermissionGate
 from .prompt import AssembledPrompt
+from .session_memory import MemoryGate, SessionMemory, Writer
 from .tools import ToolContext, ToolRegistry
 from .transcript import Transcript
 
@@ -64,6 +71,15 @@ class LoopState:
     stop_reason: str | None = None
     usage: dict = field(default_factory=dict)
     text: str = ""
+
+    #: Current context size, read from the last response rather than counted — free
+    #: and exact, where a count_tokens round trip would be neither.
+    context_tokens: int = 0
+    #: Consecutive compaction failures. Three and we stop trying.
+    compact_failures: int = 0
+    compactions: int = 0
+    memory_gate: MemoryGate = field(default_factory=MemoryGate)
+    session_memory: SessionMemory | None = None
 
 
 @dataclass(frozen=True)
@@ -101,6 +117,8 @@ async def query_loop(
     max_turns: int = MAX_TURNS,
     ctx: ToolContext | None = None,
     gate: PermissionGate | None = None,
+    writer: Writer | None = None,
+    budget: int | None = None,
     on_text: Callable[[str], None] | None = None,
     on_event: Callable[[Any], None] | None = None,
 ) -> LoopResult:
@@ -110,6 +128,7 @@ async def query_loop(
     async iterator of SSE events. Tests supply a fake.
     """
     last_text = ""
+    ptl_recovered = False  # one compaction-and-retry per run, never a loop
 
     while True:
         if state.turn >= max_turns:
@@ -199,6 +218,15 @@ async def query_loop(
 
         except Exception as exc:  # transport, auth, malformed request
             await _close_ledger(state, executor)
+
+            # The request outgrew the window. Compaction is the recovery, not a retry
+            # loop: one attempt, then the turn fails honestly.
+            if is_prompt_too_long(exc) and not ptl_recovered:
+                if await maybe_compact(state, client, model, budget, forced=True):
+                    ptl_recovered = True
+                    state.turn -= 1  # the turn never ran; do not spend it
+                    continue
+
             state.stop_reason = "api_error"
             return LoopResult(
                 "api_error", state.turn, last_text, state.usage, f"{type(exc).__name__}: {exc}"
@@ -213,6 +241,8 @@ async def query_loop(
             return LoopResult("api_error", state.turn, last_text, state.usage, stream_error)
 
         if executor.issued == 0:
+            state.context_tokens = state.usage.get("total_input_tokens", state.context_tokens)
+            await maybe_write_memory(state, client, model, writer, at_stopping_point=True)
             state.stop_reason = "end_turn"
             return LoopResult("end_turn", state.turn, last_text, state.usage)
 
@@ -225,6 +255,81 @@ async def query_loop(
 
         for outcome in outcomes:
             state.transcript.append(outcome.to_step(), turn=state.turn)
+
+        state.context_tokens = state.usage.get("total_input_tokens", state.context_tokens)
+        state.memory_gate.observe_tool_calls(
+            len(outcomes), sum(1 for o in outcomes if o.is_error)
+        )
+        # Mid-tool-chain is not a coherent moment to write notes, so the gate may defer.
+        await maybe_write_memory(state, client, model, writer, at_stopping_point=False)
+        await maybe_compact(state, client, model, budget)
+
+
+async def maybe_write_memory(
+    state: LoopState,
+    client: Any,
+    model: str,
+    writer: Writer | None,
+    *,
+    at_stopping_point: bool,
+) -> bool:
+    """Write the continuation brief if the gate says this is the moment."""
+    if writer is None:
+        return False
+    decision = state.memory_gate.decide(state.context_tokens, at_stopping_point)
+    if decision is None:
+        return False
+    try:
+        state.session_memory = await writer(state.transcript.steps(), state.session_memory)
+    except Exception:  # noqa: BLE001 - a brief we could not write must not end the run
+        return False
+    state.session_memory.save(state.transcript.session_id)
+    state.memory_gate.record_write(state.context_tokens)
+    return True
+
+
+async def maybe_compact(
+    state: LoopState,
+    client: Any,
+    model: str,
+    budget: int | None = None,
+    *,
+    forced: bool = False,
+) -> bool:
+    """Summarize the old history and rebuild the working context from it.
+
+    Returns True if a boundary was written. The circuit breaker is the chapter's hard-won
+    lesson: "You may fail, but you may not fail infinitely without memory."
+    """
+    if state.compact_failures >= MAX_CONSECUTIVE_COMPACT_FAILURES:
+        return False
+    if not forced and state.context_tokens < compact_threshold(budget):
+        return False
+
+    nodes = state.transcript.path_to_root()
+    cut = plan_cut(nodes)
+    if cut <= 0:
+        return False  # nothing old enough to reclaim
+
+    try:
+        brief = await summarize(
+            client, model, [n.step for n in nodes[:cut]], state.session_memory
+        )
+    except Exception:  # noqa: BLE001 - counted, not raised; three strikes stops it
+        state.compact_failures += 1
+        return False
+
+    state.compact_failures = 0
+    state.session_memory = brief
+    brief.save(state.transcript.session_id)
+    state.transcript.compact_boundary(
+        brief.render(),
+        nodes[cut:],
+        meta={"pre_compact_tokens": state.context_tokens, "steps_compacted": cut},
+    )
+    state.compactions += 1
+    state.memory_gate.record_write(state.context_tokens)
+    return True
 
 
 async def _close_ledger(state: LoopState, executor: StreamingToolExecutor) -> None:

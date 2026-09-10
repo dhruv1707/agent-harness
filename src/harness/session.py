@@ -14,9 +14,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .compaction import summarize
 from .config import AGENT_DIR, MAX_TURNS, MODEL, RUNS_DIR
 from .loop import LoopResult, LoopState, query_loop
 from .permissions import Asker, PermissionGate, PermissionPolicy, default_asker
+from .session_memory import SessionMemory
 from .prompt import AssembledPrompt, RunContext, build_effective_system_prompt
 from .tools import ToolContext, ToolRegistry, default_registry
 from .transcript import Transcript
@@ -42,6 +44,8 @@ class AgentSession:
     max_turns: int = MAX_TURNS
     policy_path: Path | None = None
     auto_approve: bool = False
+    #: Context budget in tokens. None uses the configured default.
+    budget: int | None = None
     #: None means "pick a terminal asker if someone is there to answer".
     asker: Asker | None = None
 
@@ -132,11 +136,36 @@ class AgentSession:
             )
 
         prompt = self.build_prompt(run_context)
-        self.transcript.append(prompt.initial_input(message), turn=0)
+        opening = prompt.initial_input(message)
+
+        carried = SessionMemory.load(self.session_id)
+        if carried is not None:
+            # Resuming: lead with where things stand, so the model does not have to
+            # re-derive it from a long history it may no longer fully hold.
+            opening["content"].insert(
+                0,
+                {
+                    "type": "text",
+                    "text": "Continuation brief from earlier in this session:\n\n"
+                    + carried.render(),
+                },
+            )
+        self.transcript.append(opening, turn=0)
 
         state = LoopState(transcript=self.transcript)
         if self.client is None:
             self.client = make_client()
+
+        # A resumed session picks its brief back up, so the gate updates it rather than
+        # starting over.
+        if carried is not None:
+            state.session_memory = carried
+            state.memory_gate.exists = True
+
+        # The brief writer and the compaction summarizer produce the same artifact from
+        # the same input, so they are the same function.
+        async def writer(steps, previous):
+            return await summarize(self.client, self.model, steps, previous)
 
         self._active = True
         try:
@@ -149,6 +178,8 @@ class AgentSession:
                 max_turns=self.max_turns,
                 ctx=self.build_context(),
                 gate=self.gate,
+                writer=writer,
+                budget=self.budget,
                 on_text=on_text,
                 on_event=on_event,
             )

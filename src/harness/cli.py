@@ -9,11 +9,12 @@ import os
 import sys
 from pathlib import Path
 
-from .config import MAX_TURNS, MODEL, cache_floor
+from .config import CONTEXT_BUDGET_TOKENS, MAX_TURNS, MODEL, cache_floor
 from .events import ToolCallReady, ToolCallStarted
 from .prompt import AssembledPrompt, RunContext, build_effective_system_prompt
 from .mcp import MCPBridge, load_servers
 from .session import AgentSession
+from .session_memory import SessionMemory
 from .transcript import Transcript
 
 RULE = "=" * 78
@@ -164,6 +165,7 @@ def _cmd_run(args) -> int:
         "max_turns": args.max_turns,
         "policy_path": args.permissions,
         "auto_approve": args.yes,
+        "budget": args.budget,
     }
     try:
         if args.resume:
@@ -286,6 +288,24 @@ def _cmd_mcp(args) -> int:
         return 1
 
 
+# ---- harness memory ----------------------------------------------------------
+
+
+def _cmd_memory(args) -> int:
+    """Show a session's continuation brief."""
+    brief = SessionMemory.load(args.session_id)
+    if brief is None:
+        print(
+            f"[none] session {args.session_id} has no continuation brief — it never grew "
+            "large enough to need one",
+            file=sys.stderr,
+        )
+        return 1
+    print(brief.render())
+    print(f"[{brief.tokens():,} tokens estimated]", file=sys.stderr)
+    return 0
+
+
 # ---- harness transcript ------------------------------------------------------
 
 
@@ -332,6 +352,12 @@ def main() -> int:
     run.add_argument("--model", default=MODEL, help=f"Default: {MODEL}")
     run.add_argument("--max-turns", type=int, default=MAX_TURNS)
     run.add_argument(
+        "--budget",
+        type=int,
+        default=None,
+        help=f"Context budget in tokens. Default: {CONTEXT_BUDGET_TOKENS:,}",
+    )
+    run.add_argument(
         "--permissions",
         type=Path,
         default=None,
@@ -357,6 +383,10 @@ def main() -> int:
     )
     mcp_cmd.add_argument("--mcp-config", type=Path, default=None)
     mcp_cmd.set_defaults(fn=_cmd_mcp)
+
+    mem = sub.add_parser("memory", help="Show a session's continuation brief.")
+    mem.add_argument("session_id")
+    mem.set_defaults(fn=_cmd_memory)
 
     tree = sub.add_parser("transcript", help="Render a session's node tree.")
     tree.add_argument("session_id")
