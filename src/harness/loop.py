@@ -19,6 +19,7 @@ from typing import Any
 from .compaction import is_prompt_too_long, plan_cut, summarize
 from .config import (
     MAX_CONSECUTIVE_COMPACT_FAILURES,
+    MIN_STEPS_TO_COMPACT,
     MAX_TURNS,
     MODEL,
     compact_threshold,
@@ -78,6 +79,10 @@ class LoopState:
     #: Consecutive compaction failures. Three and we stop trying.
     compact_failures: int = 0
     compactions: int = 0
+    #: Context size at the last compaction. Compacting again before the context has grown
+    #: past it cannot help — if the prefix alone exceeds the budget, no amount of
+    #: summarizing gets under it, and retrying every turn is a runaway.
+    last_compact_tokens: int = 0
     memory_gate: MemoryGate = field(default_factory=MemoryGate)
     session_memory: SessionMemory | None = None
 
@@ -305,8 +310,14 @@ async def maybe_compact(
         return False
     if not forced and state.context_tokens < compact_threshold(budget):
         return False
+    if not forced and state.compactions and state.context_tokens <= state.last_compact_tokens:
+        # Still over the threshold but no larger than last time: the irreducible part of
+        # the context is simply bigger than the budget. Compacting again cannot fix that.
+        return False
 
     nodes = state.transcript.path_to_root()
+    if len(nodes) < MIN_STEPS_TO_COMPACT:
+        return False  # not enough history to be worth a summarization call
     cut = plan_cut(nodes)
     if cut <= 0:
         return False  # nothing old enough to reclaim
@@ -328,6 +339,7 @@ async def maybe_compact(
         meta={"pre_compact_tokens": state.context_tokens, "steps_compacted": cut},
     )
     state.compactions += 1
+    state.last_compact_tokens = state.context_tokens
     state.memory_gate.record_write(state.context_tokens)
     return True
 

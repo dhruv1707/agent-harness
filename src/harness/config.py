@@ -101,6 +101,10 @@ MAX_CONSECUTIVE_COMPACT_FAILURES = 3
 #: Share of the most recent steps kept verbatim through a compaction.
 KEEP_RECENT_SHARE = 0.20
 
+#: Below this there is nothing worth a summarization call. Without it a small budget
+#: compacts a one-step history, spending a model call to reclaim almost nothing.
+MIN_STEPS_TO_COMPACT = 8
+
 
 def compact_threshold(budget: int | None = None) -> int:
     """Context size at which compaction should run, in tokens.

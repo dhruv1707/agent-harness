@@ -131,9 +131,19 @@ def m(text):
 
 
 def build_transcript():
+    """Five nodes — enough to exercise the boundary mechanics."""
     t = Transcript("s-compact")
     t.append(u("original question"), turn=0)
     for i in range(1, 5):
+        t.append(m(f"work {i}"), turn=i)
+    return t
+
+
+def build_long_transcript(name="s-long", steps=16):
+    """Past MIN_STEPS_TO_COMPACT, so the compaction path actually engages."""
+    t = Transcript(name)
+    t.append(u("original question"), turn=0)
+    for i in range(1, steps):
         t.append(m(f"work {i}"), turn=i)
     return t
 
@@ -250,7 +260,7 @@ class AlwaysFails:
 def test_three_consecutive_failures_stop_further_attempts():
     """"You may fail, but you may not fail infinitely without memory.\""""
     client = AlwaysFails()
-    state = LoopState(transcript=build_transcript(), context_tokens=999_999)
+    state = LoopState(transcript=build_long_transcript("s-breaker"), context_tokens=999_999)
 
     async def scenario():
         attempts = []
@@ -266,7 +276,7 @@ def test_three_consecutive_failures_stop_further_attempts():
 
 def test_compaction_does_not_run_below_the_threshold():
     client = AlwaysFails()
-    state = LoopState(transcript=build_transcript(), context_tokens=1_000)
+    state = LoopState(transcript=build_long_transcript("s-under"), context_tokens=1_000)
     assert asyncio.run(maybe_compact(state, client, "m")) is False
     assert client.calls == 0
 
@@ -274,7 +284,7 @@ def test_compaction_does_not_run_below_the_threshold():
 def test_a_forced_compaction_ignores_the_threshold():
     """The PTL path compacts regardless of where the accounting thinks it is."""
     client = FakeClient()
-    state = LoopState(transcript=build_transcript(), context_tokens=10)
+    state = LoopState(transcript=build_long_transcript("s-forced"), context_tokens=10)
 
     assert asyncio.run(maybe_compact(state, client, "m", forced=True)) is True
     assert state.compactions == 1
@@ -303,3 +313,39 @@ def test_a_small_budget_never_produces_a_negative_threshold():
 
     for budget in (5_000, 30_000, 33_000):
         assert 0 < compact_threshold(budget) <= budget
+
+
+def test_a_trivial_history_is_not_worth_a_summarization_call():
+    from harness.config import MIN_STEPS_TO_COMPACT
+
+    client = FakeClient()
+    t = Transcript("s-tiny")
+    for i in range(MIN_STEPS_TO_COMPACT - 1):
+        t.append(m(f"step {i}"), turn=i)
+    state = LoopState(transcript=t, context_tokens=999_999)
+
+    assert asyncio.run(maybe_compact(state, client, "m")) is False
+    assert client.aio.interactions.calls == []
+
+
+def test_compaction_does_not_repeat_without_growth():
+    """If the irreducible context exceeds the budget, retrying every turn is a runaway."""
+    client = FakeClient()
+    t = Transcript("s-runaway")
+    for i in range(20):
+        t.append(m(f"step {i}"), turn=i)
+    state = LoopState(transcript=t, context_tokens=50_000)
+
+    assert asyncio.run(maybe_compact(state, client, "m", budget=10_000)) is True
+    assert state.last_compact_tokens == 50_000
+
+    # Same size, or smaller: compacting again cannot help.
+    assert asyncio.run(maybe_compact(state, client, "m", budget=10_000)) is False
+    state.context_tokens = 40_000
+    assert asyncio.run(maybe_compact(state, client, "m", budget=10_000)) is False
+
+    # Grown past the last point: worth another pass.
+    state.context_tokens = 60_000
+    for i in range(20):
+        state.transcript.append(m(f"more {i}"), turn=100 + i)
+    assert asyncio.run(maybe_compact(state, client, "m", budget=10_000)) is True
