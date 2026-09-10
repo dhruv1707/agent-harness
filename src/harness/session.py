@@ -153,6 +153,9 @@ class AgentSession:
         self.transcript.append(opening, turn=0)
 
         state = LoopState(transcript=self.transcript)
+        # Opening a session — or resuming, or branching — is a rebuild point: walk the
+        # tree once here, then append for the rest of the run.
+        state.project()
         if self.client is None:
             self.client = make_client()
 

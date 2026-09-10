@@ -68,6 +68,18 @@ class LoopState:
     """What changes across turns. The transcript is the history; nothing shadows it."""
 
     transcript: Transcript
+
+    #: The conversation the model actually sees, held in memory.
+    #:
+    #: The tree is the durable record; this is its projection. Re-deriving it by walking
+    #: the tree on every turn would work — it is what we did first — but it leaves the
+    #: question "when is the context rebuilt?" with the answer "constantly, implicitly".
+    #: Projecting once and appending makes the rebuild points explicit, and there are
+    #: exactly three: loading a session, branching, and compacting.
+    #:
+    #: Every append goes through `record()` so the two cannot drift.
+    messages: list[dict] = field(default_factory=list)
+
     turn: int = 0
     stop_reason: str | None = None
     usage: dict = field(default_factory=dict)
@@ -85,6 +97,27 @@ class LoopState:
     last_compact_tokens: int = 0
     memory_gate: MemoryGate = field(default_factory=MemoryGate)
     session_memory: SessionMemory | None = None
+
+
+    # ---- the projection ------------------------------------------------------
+
+    def project(self) -> None:
+        """Rebuild the working context from the tree.
+
+        Called at the three points where the tree's shape changes under us: opening a
+        session, branching to a different node, and compacting.
+        """
+        self.messages = self.transcript.steps()
+
+    def record(self, step: dict, *, turn: int = 0, meta: dict | None = None):
+        """Append to the durable tree and the in-memory projection together.
+
+        The single write path. Anything appending to one and not the other is a bug that
+        surfaces as the model seeing a different conversation than the transcript records.
+        """
+        node = self.transcript.append(step, turn=turn, meta=meta)
+        self.messages.append(step)
+        return node
 
 
 @dataclass(frozen=True)
@@ -106,7 +139,7 @@ def build_runtime(
     return RuntimeContext(
         model=model,
         system_instruction=prompt.system_instruction,
-        input=state.transcript.steps(),
+        input=list(state.messages),
         tools=registry.declarations(),
         store=False,
     )
@@ -154,7 +187,7 @@ async def query_loop(
             if not text_buffer:
                 return
             joined = "".join(text_buffer)
-            state.transcript.append(
+            state.record(
                 {"type": "model_output", "content": [{"type": "text", "text": joined}]},
                 turn=state.turn,
             )
@@ -185,7 +218,7 @@ async def query_loop(
                         thought_step["signature"] = event.signature
                     if event.summary:
                         thought_step["summary"] = event.summary
-                    state.transcript.append(thought_step, turn=state.turn)
+                    state.record(thought_step, turn=state.turn)
 
                 elif isinstance(event, ToolCallStarted):
                     pass  # arguments still streaming — nothing to do yet
@@ -193,7 +226,7 @@ async def query_loop(
                 elif isinstance(event, ToolCallReady):
                     # Dispatch mid-stream. This is the whole point of the executor.
                     flush_text()
-                    state.transcript.append(
+                    state.record(
                         {
                             "type": "function_call",
                             "id": event.call_id,
@@ -259,7 +292,7 @@ async def query_loop(
             return LoopResult("interrupted", state.turn, last_text, state.usage)
 
         for outcome in outcomes:
-            state.transcript.append(outcome.to_step(), turn=state.turn)
+            state.record(outcome.to_step(), turn=state.turn)
 
         state.context_tokens = state.usage.get("total_input_tokens", state.context_tokens)
         state.memory_gate.observe_tool_calls(
@@ -285,7 +318,7 @@ async def maybe_write_memory(
     if decision is None:
         return False
     try:
-        state.session_memory = await writer(state.transcript.steps(), state.session_memory)
+        state.session_memory = await writer(list(state.messages), state.session_memory)
     except Exception:  # noqa: BLE001 - a brief we could not write must not end the run
         return False
     state.session_memory.save(state.transcript.session_id)
@@ -338,6 +371,7 @@ async def maybe_compact(
         nodes[cut:],
         meta={"pre_compact_tokens": state.context_tokens, "steps_compacted": cut},
     )
+    state.project()  # the tree's shape changed under us
     state.compactions += 1
     state.last_compact_tokens = state.context_tokens
     state.memory_gate.record_write(state.context_tokens)
@@ -353,4 +387,4 @@ async def _close_ledger(state: LoopState, executor: StreamingToolExecutor) -> No
     except Exception:  # noqa: BLE001 - a failed cancel must not mask the original exit
         return
     for outcome in outcomes:
-        state.transcript.append(outcome.to_step(), turn=state.turn)
+        state.record(outcome.to_step(), turn=state.turn)

@@ -328,3 +328,64 @@ def test_tool_body_starts_before_the_stream_finishes():
         f"tool body waited for turn 1's stream to finish — mid-stream dispatch is "
         f"not working. log={log}"
     )
+
+
+# ---- the in-memory projection -------------------------------------------------
+
+
+def test_record_keeps_the_projection_and_the_tree_in_step():
+    """One write path. Appending to one and not the other means the model sees a
+    different conversation than the transcript records."""
+    state = LoopState(transcript=Transcript("s-proj"))
+    for i in range(5):
+        state.record({"type": "model_output", "content": [{"type": "text", "text": f"m{i}"}]},
+                     turn=i)
+
+    assert state.messages == state.transcript.steps()
+    assert len(state.messages) == 5
+
+
+def test_project_rebuilds_from_the_tree_after_branching():
+    t = Transcript("s-branch")
+    state = LoopState(transcript=t)
+    state.record({"type": "user_input", "content": [{"type": "text", "text": "shared"}]})
+    fork = t.head
+    state.record({"type": "model_output", "content": [{"type": "text", "text": "path A"}]})
+
+    t.branch_from(fork)
+    state.project()  # the tree's shape changed under us
+
+    assert [s["content"][0]["text"] for s in state.messages] == ["shared"]
+    assert state.messages == t.steps()
+
+
+def test_project_rebuilds_from_the_tree_after_compaction():
+    t = Transcript("s-proj-compact")
+    state = LoopState(transcript=t)
+    for i in range(6):
+        state.record({"type": "model_output", "content": [{"type": "text", "text": f"m{i}"}]},
+                     turn=i)
+
+    t.compact_boundary("SUMMARY", t.path_to_root()[-2:])
+    state.project()
+
+    assert [s["content"][0]["text"] for s in state.messages] == ["SUMMARY", "m4", "m5"]
+    assert state.messages == t.steps()
+
+
+def test_the_request_input_matches_the_tree_walk_after_a_real_run():
+    """The projection is what gets sent, so it must equal what the tree says happened."""
+    client = FakeClient(
+        [
+            [*tool_call(0, "c1", "ping", '{"tag": "a"}'), done()],
+            [text("finished"), done()],
+        ]
+    )
+    result, state = run(client)
+
+    assert result.stop_reason == "end_turn"
+    assert state.messages == state.transcript.steps()
+    # And the second request carried everything the first did, plus the turn's steps.
+    first, second = (r["input"] for r in client.requests)
+    assert second[: len(first)] == first
+    assert len(second) > len(first)
