@@ -174,6 +174,33 @@ async def _await_callback() -> AuthorizationCodeResult:
     )
 
 
+async def _validate_same_origin(server_url: str, prm_resource: str | None) -> None:
+    """Accept a resource identifier that differs only in path, reject a different host.
+
+    Triple Whale's Protected Resource Metadata advertises
+    `https://mcp.triplewhale.com/sse` while its documented endpoint is
+    `https://mcp.triplewhale.com/v1/mcp`. RFC 8707 validation rejects that outright, and
+    the mismatch is the server's, not ours.
+
+    The check still matters though: its real job is stopping a hostile PRM from pointing
+    the token's audience at a *different* host, which would hand our credential to someone
+    else. So this relaxes the path comparison and keeps the origin comparison.
+    """
+    if prm_resource is None:
+        return
+    server = urlparse(server_url)
+    resource = urlparse(prm_resource)
+    if (server.scheme, server.hostname, server.port) != (
+        resource.scheme,
+        resource.hostname,
+        resource.port,
+    ):
+        raise RuntimeError(
+            f"protected resource {prm_resource} is on a different origin than "
+            f"{server_url} — refusing to authorize"
+        )
+
+
 def _oauth_provider(server: MCPServerConfig) -> OAuthClientProvider:
     return OAuthClientProvider(
         server_url=server.url,
@@ -186,6 +213,7 @@ def _oauth_provider(server: MCPServerConfig) -> OAuthClientProvider:
         storage=FileTokenStorage(server.token_path),
         redirect_handler=_open_browser,
         callback_handler=_await_callback,
+        validate_resource_url=_validate_same_origin,
     )
 
 

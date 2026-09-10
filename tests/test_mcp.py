@@ -224,3 +224,47 @@ def test_tokens_land_in_the_gitignored_auth_dir():
     config = MCPServerConfig(name="triplewhale", url="https://x/mcp")
     assert config.token_path.name == "triplewhale.json"
     assert config.token_path.parent.name == ".mcp-auth"
+
+
+# ---- OAuth resource validation ------------------------------------------------
+
+
+def test_resource_on_the_same_origin_is_accepted():
+    """Triple Whale advertises /sse while serving /v1/mcp. That mismatch is benign."""
+    from harness.mcp import _validate_same_origin
+
+    asyncio.run(
+        _validate_same_origin(
+            "https://mcp.triplewhale.com/v1/mcp", "https://mcp.triplewhale.com/sse"
+        )
+    )
+
+
+def test_resource_on_another_host_is_rejected():
+    """The check exists to stop a hostile PRM redirecting our token's audience."""
+    import pytest
+
+    from harness.mcp import _validate_same_origin
+
+    with pytest.raises(RuntimeError, match="different origin"):
+        asyncio.run(
+            _validate_same_origin(
+                "https://mcp.triplewhale.com/v1/mcp", "https://evil.example.com/mcp"
+            )
+        )
+
+
+def test_resource_on_another_port_or_scheme_is_rejected():
+    import pytest
+
+    from harness.mcp import _validate_same_origin
+
+    for hostile in ("http://mcp.triplewhale.com/v1/mcp", "https://mcp.triplewhale.com:9999/x"):
+        with pytest.raises(RuntimeError):
+            asyncio.run(_validate_same_origin("https://mcp.triplewhale.com/v1/mcp", hostile))
+
+
+def test_absent_resource_metadata_is_allowed():
+    from harness.mcp import _validate_same_origin
+
+    asyncio.run(_validate_same_origin("https://mcp.triplewhale.com/v1/mcp", None))
