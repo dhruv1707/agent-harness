@@ -2,6 +2,17 @@
 
 ## Protocol
 
+**This applies when the request is the daily job, or a part of it. Run only the steps the
+request actually needs.** The steps below stand alone:
+
+- "what won last week" stops after step 1
+- "read me the hooks" stops after step 2
+- "what pattern do the winners share" stops after step 3
+- only step 4 needs the brand and product tools, and `memory/brief-samples.md`
+
+Loading script context for a run that writes no scripts costs a round trip and buys
+nothing. A question outside this pipeline gets a direct answer, not the pipeline.
+
 The account id and brand id are in the governance file. You do not need to look them up.
 
 **1. Rank.** Confirm the metric id with `list_ad_account_metrics`, then call
@@ -27,8 +38,13 @@ performance across ten dimensions, one of which is visual hook. Use it to see wh
 winners share rather than reasoning ad-by-ad. Each bucket carries `top_creatives` with ids;
 pass up to 20 at a time to `get_ad_account_creative_tags` for the per-asset detail.
 
-**4. Write scripts.** Read `get_owned_brand` and `list_owned_brand_products` before
-drafting, then write the way `memory/brief-samples.md` writes.
+**4. Write scripts.** *Only when scripts are actually being written.* Read
+`get_owned_brand` and `list_owned_brand_products` first — they carry the compliance
+boundary and the awareness levels — then write the way `memory/brief-samples.md` writes.
+
+Never brief an iteration on a hook you have not read. If a winner's hook is UNVERIFIED,
+either transcribe it or brief a different winner; do not infer an opener from the ad name
+and write against it.
 
 Competitor work, when asked for: `search_library_ads` → `get_library_ad` for the full
 creative → `get_library_ad_transcript` for what is actually said. That transcript call is
