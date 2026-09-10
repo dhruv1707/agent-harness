@@ -210,7 +210,7 @@ class FakeInteractions:
         self.calls.append(kwargs)
         if self.fail_first_with and len(self.calls) == 1:
             raise RuntimeError(self.fail_first_with)
-        return type("R", (), {"output_text": "## Current State\nsummarized\n"})()
+        return type("R", (), {"output_text": "## Findings\nsummarized\n"})()
 
 
 class FakeClient:
@@ -222,7 +222,7 @@ class FakeClient:
 def test_summarize_returns_a_parsed_brief():
     client = FakeClient()
     brief = asyncio.run(summarize(client, "m", [result("t", "x" * 5_000)]))
-    assert brief.sections["Current State"] == "summarized"
+    assert brief.sections["Findings"] == "summarized"
 
 
 def test_ptl_on_the_summary_call_retries_once_with_a_truncated_head():
@@ -230,7 +230,7 @@ def test_ptl_on_the_summary_call_retries_once_with_a_truncated_head():
     steps = [m(f"turn {i}") for i in range(10)]
     brief = asyncio.run(summarize(client, "m", steps))
 
-    assert brief.sections["Current State"] == "summarized"
+    assert brief.sections["Findings"] == "summarized"
     assert len(client.aio.interactions.calls) == 2, "exactly one retry, never a loop"
     first, second = (c["input"][0]["content"][0]["text"] for c in client.aio.interactions.calls)
     assert len(second) < len(first), "the retry dropped the oldest half"

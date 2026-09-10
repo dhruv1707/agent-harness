@@ -1,41 +1,46 @@
 """The continuation brief and the gate that decides when to write it."""
 
 from harness.config import (
-    MAX_SECTION_TOKENS,
     MAX_SESSION_MEMORY_TOKENS,
     SESSION_MEMORY_FIRST_WRITE_TOKENS,
     approx_tokens,
 )
-from harness.session_memory import SECTIONS, TRIMMED, MemoryGate, SessionMemory
+from harness.session_memory import (
+    SECTION_BUDGETS,
+    SECTIONS,
+    TRIMMED,
+    MemoryGate,
+    SessionMemory,
+)
 
 
 # ---- the brief ---------------------------------------------------------------
 
 
 def test_render_always_carries_every_section():
-    text = SessionMemory({"Current State": "ranked by roas"}).render()
+    text = SessionMemory({"Findings": "ranked by roas"}).render()
     for name in SECTIONS:
         assert f"## {name}" in text
 
 
 def test_parse_round_trips():
     original = SessionMemory(
-        {"Current State": "read 8 hooks", "Worklog": "- ranked\n- transcribed"}
+        {"Findings": "8 winners share a problem callout", "Next": "transcribe ad 52553174233835"}
     )
     parsed = SessionMemory.parse(original.render())
-    assert parsed.sections["Current State"] == "read 8 hooks"
-    assert parsed.sections["Worklog"] == "- ranked\n- transcribed"
+    assert parsed.sections["Findings"] == "8 winners share a problem callout"
+    assert parsed.sections["Next"] == "transcribe ad 52553174233835"
 
 
 def test_parse_ignores_headings_outside_the_template():
     """The template may not drift, or the brief cannot be diffed or trusted on resume."""
-    parsed = SessionMemory.parse("## Current State\nhere\n\n## Invented Section\nnope\n")
-    assert parsed.sections["Current State"] == "here"
+    parsed = SessionMemory.parse("## Findings\nhere\n\n## Invented Section\nnope\n")
+    assert parsed.sections["Findings"] == "here"
     assert "Invented Section" not in parsed.sections
 
 
 def test_an_empty_section_round_trips_as_empty():
-    assert SessionMemory.parse(SessionMemory().render()).sections["Worklog"] == ""
+    assert SessionMemory.parse(SessionMemory().render()).sections["Next"] == ""
 
 
 # ---- budgets -----------------------------------------------------------------
@@ -43,39 +48,47 @@ def test_an_empty_section_round_trips_as_empty():
 
 def test_an_oversized_section_loses_its_oldest_lines():
     lines = [f"entry {i} " + "x" * 200 for i in range(200)]
-    brief = SessionMemory({"Worklog": "\n".join(lines)}).enforce_budgets()
+    brief = SessionMemory({"Examined": "\n".join(lines)}).enforce_budgets()
 
-    body = brief.sections["Worklog"]
-    assert approx_tokens(body) <= MAX_SECTION_TOKENS + approx_tokens(TRIMMED) + 8
+    body = brief.sections["Examined"]
+    assert approx_tokens(body) <= SECTION_BUDGETS["Examined"] + approx_tokens(TRIMMED) + 8
     assert TRIMMED in body
     assert "entry 199" in body, "the newest state is what continuation needs"
     assert "entry 0 " not in body
 
 
-def test_the_section_caps_bound_the_whole_brief():
+def test_the_section_budgets_bound_the_whole_brief():
     """Why there is no whole-brief shedding step.
 
-    Five sections capped at MAX_SECTION_TOKENS cannot exceed MAX_SESSION_MEMORY_TOKENS, so
-    a shed path would be unreachable. Add a section and this fails — which is the signal to
-    reinstate it, as the book's nine-section template requires.
+    The per-section budgets sum below the whole-brief cap, with room left for the headings,
+    so a shed path would be unreachable. Widen a budget or add a section and this fails —
+    which is the signal to reinstate it, as the book's nine-section template requires.
     """
-    assert len(SECTIONS) * MAX_SECTION_TOKENS <= MAX_SESSION_MEMORY_TOKENS
+    assert set(SECTION_BUDGETS) == set(SECTIONS), "every section needs a budget"
+    assert sum(SECTION_BUDGETS.values()) < MAX_SESSION_MEMORY_TOKENS
+
+
+def test_findings_gets_the_largest_budget():
+    """It is the knowledge the compacted history no longer holds. Everything else is
+    replaceable; a lost finding means re-doing the work that produced it."""
+    assert SECTION_BUDGETS["Findings"] == max(SECTION_BUDGETS.values())
 
 
 def test_every_section_over_budget_still_lands_within_the_whole_cap():
-    filler = "y" * (MAX_SECTION_TOKENS * 8)
+    # Multi-line, so trimming keeps the newest lines rather than emptying the section.
+    filler = "\n".join(f"line {i} " + "y" * 120 for i in range(400))
     brief = SessionMemory({name: filler for name in SECTIONS}).enforce_budgets()
     assert brief.tokens() <= MAX_SESSION_MEMORY_TOKENS
 
 
 def test_a_small_brief_is_left_alone():
-    brief = SessionMemory({"Current State": "all good"})
-    assert brief.enforce_budgets().sections["Current State"] == "all good"
+    brief = SessionMemory({"Current state": "all good"})
+    assert brief.enforce_budgets().sections["Current state"] == "all good"
 
 
 def test_save_and_load(tmp_path):
-    SessionMemory({"Current State": "mid-run"}).save("s-1", runs_dir=tmp_path)
-    assert SessionMemory.load("s-1", runs_dir=tmp_path).sections["Current State"] == "mid-run"
+    SessionMemory({"Current state": "mid-run"}).save("s-1", runs_dir=tmp_path)
+    assert SessionMemory.load("s-1", runs_dir=tmp_path).sections["Current state"] == "mid-run"
     assert SessionMemory.load("s-missing", runs_dir=tmp_path) is None
 
 

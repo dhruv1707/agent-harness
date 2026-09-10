@@ -29,12 +29,26 @@ from .config import (
 #: Fixed template. The model fills these in and may not invent or drop one — a brief with
 #: a moving shape cannot be diffed against the last version or trusted on resume.
 SECTIONS: tuple[str, ...] = (
-    "Current State",
-    "Task Specification",
-    "Errors & Corrections",
-    "Key Results",
-    "Worklog",
+    "Task",
+    "Findings",
+    "Examined",
+    "Failed approaches",
+    "Current state",
+    "Next",
 )
+
+#: Budget per section, allocated by value rather than evenly. Findings is what makes the
+#: brief worth having — it is the knowledge the compacted history no longer holds — so it
+#: gets the most room. Next needs one line. Six equal sections would also sit exactly on
+#: MAX_SESSION_MEMORY_TOKENS, leaving no room for the headings themselves.
+SECTION_BUDGETS: dict[str, int] = {
+    "Task": 1_000,
+    "Findings": 3_000,
+    "Examined": 1_500,
+    "Failed approaches": 1_500,
+    "Current state": 1_500,
+    "Next": 500,
+}
 
 TRIMMED = "_[earlier entries trimmed to stay within budget]_"
 
@@ -93,15 +107,17 @@ class SessionMemory:
     def enforce_budgets(self) -> SessionMemory:
         """Condense rather than truncate: a section over its cap loses its oldest lines.
 
-        There is deliberately no whole-brief shedding step. With five sections at
-        `MAX_SECTION_TOKENS` each, the total cannot exceed `MAX_SESSION_MEMORY_TOKENS` —
-        the arithmetic makes it unreachable, and `test_the_section_caps_bound_the_whole_brief`
-        fails if a future section breaks that. The book's template has nine sections, where
-        shedding is genuinely needed; ours does not, so shipping the branch would be
-        shipping dead code.
+        There is deliberately no whole-brief shedding step. `SECTION_BUDGETS` sums to 9,000
+        against a 12,000 total, so the arithmetic makes it unreachable, and
+        `test_the_section_budgets_bound_the_whole_brief` fails if that stops being true.
+        The book's nine-section template is where shedding earns its place; ours does not,
+        so shipping the branch would be shipping dead code.
         """
         return SessionMemory(
-            sections={name: _trim_section(body) for name, body in self.sections.items()}
+            sections={
+                name: _trim_section(body, SECTION_BUDGETS.get(name, MAX_SECTION_TOKENS))
+                for name, body in self.sections.items()
+            }
         )
 
     # ---- persistence ---------------------------------------------------------
@@ -124,12 +140,12 @@ class SessionMemory:
         return cls.parse(path.read_text(encoding="utf-8"))
 
 
-def _trim_section(body: str) -> str:
+def _trim_section(body: str, budget: int = MAX_SECTION_TOKENS) -> str:
     """Drop oldest lines until the section fits. Newest state is what continuation needs."""
-    if approx_tokens(body) <= MAX_SECTION_TOKENS:
+    if approx_tokens(body) <= budget:
         return body
     lines = body.splitlines()
-    while lines and approx_tokens("\n".join(lines)) > MAX_SECTION_TOKENS:
+    while lines and approx_tokens("\n".join(lines)) > budget:
         lines.pop(0)
     return "\n".join([TRIMMED, *lines]).strip()
 
@@ -189,24 +205,33 @@ Writer = Callable[[list[dict], "SessionMemory | None"], "SessionMemory"]
 WRITE_PROMPT = """\
 You are maintaining an operational continuation brief for an agent session.
 
-Fill in every section of the template below and no others. This is not a chat log: it is
-what someone would need to pick the work up cold. Record status, pitfalls, what changed,
-and the next actionable step.
+Someone picking this up cold must be able to continue the work from this alone. Once the
+session is compacted this brief *replaces* the history it summarises, so anything not
+written here is gone.
+
+That means recording what was **learned**, not what was done.
 
 Rules:
+- Findings are facts, not activity. "Top ads all open on a problem callout, strongest is
+  ad 52553174233835 at 6.77 roas" is a finding. "Read brand-voice.md (3,684 bytes)" is
+  not — it tells the reader nothing usable and makes them open the file again.
+- Examined is a bare list of what has already been looked at, so it is not fetched twice.
+- Failed approaches covers anything tried that did not work, including things that ran
+  without error. It is what stops the next turn repeating them.
+- Next is one concrete action. Not a plan, not a list of options.
 - Do not talk about note-taking itself.
-- Do not alter the template structure or invent sections.
-- Keep Current State aligned with the latest work.
-- Keep every section dense. Prefer specifics — ids, metrics, file names — over narration.
-- Worklog is a compressed list of what was done, not a transcript.
+- Do not add, rename, reorder or drop fields.
+- Be dense. Prefer concrete values — ad ids, metric numbers, verbatim hooks — over
+  description of activity.
 
 Template:
 
-## Current State
-## Task Specification
-## Errors & Corrections
-## Key Results
-## Worklog
+## Task
+## Findings
+## Examined
+## Failed approaches
+## Current state
+## Next
 """
 
 
