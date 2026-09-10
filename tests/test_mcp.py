@@ -268,3 +268,17 @@ def test_absent_resource_metadata_is_allowed():
     from harness.mcp import _validate_same_origin
 
     asyncio.run(_validate_same_origin("https://mcp.triplewhale.com/v1/mcp", None))
+
+
+def test_the_bridge_connects_whatever_it_is_handed():
+    """`enabled` is the caller's filter. Filtering here too dropped servers silently."""
+    disabled = MCPServerConfig(name="x", url="https://unreachable.invalid/mcp", enabled=False)
+    bridge = MCPBridge(servers=[disabled])
+
+    async def scenario():
+        async with bridge:
+            return list(bridge.clients), dict(bridge.failures)
+
+    clients, failures = asyncio.run(scenario())
+    assert clients == []
+    assert "x" in failures, "a server it could not reach must be reported, never skipped"

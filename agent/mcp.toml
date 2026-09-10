@@ -20,6 +20,4 @@ auth = "oauth"
 url = "https://api.tryatria.com/mcp"
 # Atria's MCP server is OAuth 2.1 only. The X-API-Key on their site is for the REST API.
 auth = "oauth"
-# Off until authorized, so a run does not open a browser unannounced. Authorize with
-# `harness mcp atria` (naming a server explicitly overrides this), then set true.
-enabled = false
+enabled = true

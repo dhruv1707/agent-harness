@@ -297,9 +297,11 @@ class MCPBridge:
     async def __aenter__(self) -> MCPBridge:
         self._stack = AsyncExitStack()
         await self._stack.__aenter__()
+        # No `enabled` check here on purpose. Handing a server to the bridge is the
+        # instruction to connect it; deciding *which* servers to hand over belongs to the
+        # caller. Filtering in both places let a server be silently dropped — no tools and
+        # no error, the most confusing failure there is.
         for server in self.servers:
-            if not server.enabled:
-                continue
             try:
                 await self._connect(server)
             except Exception as exc:

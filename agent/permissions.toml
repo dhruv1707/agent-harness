@@ -20,16 +20,44 @@ allow = [
   # parallelise. Note run-sql executes arbitrary SQL — read-only SELECT, enforced
   # server-side — which is why the scope matters more than the tool list here.
   "mcp__triplewhale__*",
+
+  # Atria reads. Everything that only looks: the ad library, the workspace's own ad
+  # accounts and their metrics, creative tags, cached transcripts, boards, notes.
+  # get_library_ad_transcript is free; transcribe_* is not, which is why they are split.
+  "mcp__atria__get_*",
+  "mcp__atria__list_*",
+  "mcp__atria__search_*",
+  "mcp__atria__resolve_*",
+  "mcp__atria__read_*",
+  "mcp__atria__discover_*",
+  "mcp__atria__suggest_*",
+  "mcp__atria__ping",
 ]
 
 # Writes, or anything with a side effect worth a glance before it happens.
 ask = [
   "append_run_log",
+
+  # Atria writes. Each of these changes the workspace or spends credits, and the agent's
+  # job is to write scripts, not to reorganise the account. follow_advertiser says so
+  # itself: "This has real effects, not just a bookmark."
+  "mcp__atria__create_*",
+  "mcp__atria__transcribe_*",
+  "mcp__atria__follow_advertiser",
+  "mcp__atria__save_library_ad",
+  "mcp__atria__write_note",
+  "mcp__atria__add_owned_brand_competitor",
 ]
 
 # Never, whatever the model argues. Nothing yet — this fills in as tools arrive that
 # should exist for reading but never for acting.
-deny = []
+deny = [
+  # Destructive. Nothing about reading hooks and writing scripts requires undoing
+  # workspace state, so these are refused outright rather than left to a tired yes.
+  "mcp__atria__unfollow_advertiser",
+  "mcp__atria__unsave_library_ad",
+  "mcp__atria__remove_*",
+]
 
 # ---------------------------------------------------------------------------
 # MCP tools (Triple Whale, Atria)
