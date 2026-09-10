@@ -18,6 +18,12 @@ url = "https://api.tryatria.com/mcp"
 auth = "oauth"
 enabled = true
 
+# Atria's output schemas declare metric values as `number`, but it returns `null` where a
+# metric has no data — exactly as its own tool descriptions say it will. The MCP client
+# discards the whole response over that, which took out list_ad_account_creative_tags
+# entirely. We read the content blocks anyway, so the check costs more than it buys.
+validate_output = false
+
 # Atria exposes 45 tools. Every declaration costs prefix tokens on every request and gives
 # the model one more thing to choose between, so this loads only what the daily job needs.
 # Atria's own `discover_apis` exists because clients are expected to load a subset.

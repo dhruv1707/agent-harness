@@ -66,6 +66,10 @@ class MCPServerConfig:
     header_name: str = "x-api-key"
     api_key_env: str | None = None
     enabled: bool = True
+    #: Whether to enforce the server's declared output schema on responses. Turn this off
+    #: for a server whose schema contradicts its own behaviour — the SDK discards the
+    #: entire response over a single violation, which is worse than not checking.
+    validate_output: bool = True
     #: Which of the server's tools to load. Empty means all of them. Names or `prefix*`.
     #: Every declaration costs prefix tokens on every request and competes for the
     #: model's attention, so a big server is worth narrowing to the job.
@@ -90,6 +94,7 @@ def load_servers(path: Path | None = None) -> list[MCPServerConfig]:
             header_name=entry.get("header_name", "x-api-key"),
             api_key_env=entry.get("api_key_env"),
             enabled=entry.get("enabled", True),
+            validate_output=entry.get("validate_output", True),
             tools=tuple(entry.get("tools", ())),
         )
         for name, entry in (data.get("servers") or {}).items()
@@ -355,12 +360,16 @@ class MCPBridge:
         """Every connected server's tools, wrapped as ordinary local tools."""
         discovered: list[Tool] = []
         for name, client in self.clients.items():
-            wanted = next((s.tools for s in self.servers if s.name == name), ())
+            config = next((s for s in self.servers if s.name == name), None)
+            wanted = config.tools if config else ()
             listing = await client.list_tools()
             for mcp_tool in listing.tools:
                 if wanted and not any(matches_pattern(p, mcp_tool.name) for p in wanted):
                     continue
                 discovered.append(self._wrap(name, client, mcp_tool))
+
+            if config is not None and not config.validate_output:
+                _disable_output_validation(client, name)
         return discovered
 
     def _wrap(self, server_name: str, client: Client, mcp_tool: Any) -> Tool:
@@ -381,6 +390,25 @@ class MCPBridge:
             interrupt_behavior="cancel",
             wants_context=False,
         )
+
+
+def _disable_output_validation(client: Client, server_name: str) -> None:
+    """Stop the SDK discarding a whole response over one output-schema violation.
+
+    Atria declares its metric values as `number` but returns `null` where a metric has no
+    data — which its own tool descriptions state plainly ("`null` means no data for that
+    metric in the window"). The schema contradicts the documented behaviour, and the
+    client's reaction is to throw the entire response away, which took out
+    `list_ad_account_creative_tags` completely.
+
+    The cache is private to the SDK session, so this is deliberately best-effort: if the
+    attribute moves in a future version we lose the workaround, not the connection.
+    """
+    session = getattr(client, "session", None)
+    schemas = getattr(session, "_tool_output_schemas", None)
+    if isinstance(schemas, dict):
+        for tool_name in list(schemas):
+            schemas[tool_name] = None
 
 
 def _render_result(result: Any) -> str:

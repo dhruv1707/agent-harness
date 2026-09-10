@@ -327,3 +327,47 @@ def test_oauth_opens_a_browser_when_interactive(monkeypatch):
 
     asyncio.run(mcp_module._open_browser("https://auth.example.com/authorize"))
     assert opened == ["https://auth.example.com/authorize"]
+
+
+# ---- output-schema validation -------------------------------------------------
+
+
+def test_validate_output_defaults_on_and_is_configurable(tmp_path):
+    path = tmp_path / "mcp.toml"
+    path.write_text(
+        '[servers.strict]\nurl = "https://a/mcp"\n'
+        '[servers.lax]\nurl = "https://b/mcp"\nvalidate_output = false\n'
+    )
+    servers = {s.name: s for s in load_servers(path)}
+    assert servers["strict"].validate_output is True
+    assert servers["lax"].validate_output is False
+
+
+def test_atria_ships_with_output_validation_off():
+    """Atria declares metric values as `number` and returns `null` for missing data, as
+    its own descriptions say. The SDK discards the whole response over that."""
+    atria = {s.name: s for s in load_servers()}["atria"]
+    assert atria.validate_output is False
+
+
+def test_disabling_output_validation_clears_the_session_cache():
+    from harness.mcp import _disable_output_validation
+
+    class FakeSession:
+        def __init__(self):
+            self._tool_output_schemas = {"a": {"type": "object"}, "b": {"type": "object"}}
+
+    class FakeClient:
+        def __init__(self):
+            self.session = FakeSession()
+
+    client = FakeClient()
+    _disable_output_validation(client, "atria")
+    assert all(v is None for v in client.session._tool_output_schemas.values())
+
+
+def test_disabling_output_validation_survives_a_missing_attribute():
+    """It reaches into SDK internals, so it must degrade rather than break the run."""
+    from harness.mcp import _disable_output_validation
+
+    _disable_output_validation(object(), "atria")  # no session attribute at all
