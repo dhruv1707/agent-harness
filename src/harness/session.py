@@ -16,8 +16,9 @@ from typing import Any
 
 from .config import AGENT_DIR, MAX_TURNS, MODEL, RUNS_DIR
 from .loop import LoopResult, LoopState, query_loop
+from .permissions import Asker, PermissionGate, PermissionPolicy, default_asker
 from .prompt import AssembledPrompt, RunContext, build_effective_system_prompt
-from .tools import ToolRegistry, default_registry
+from .tools import ToolContext, ToolRegistry, default_registry
 from .transcript import Transcript
 
 
@@ -39,10 +40,35 @@ class AgentSession:
     agent_dir: Path = AGENT_DIR
     client: Any = None
     max_turns: int = MAX_TURNS
+    policy_path: Path | None = None
+    auto_approve: bool = False
+    #: None means "pick a terminal asker if someone is there to answer".
+    asker: Asker | None = None
+
+    _gate: PermissionGate | None = field(default=None, init=False, repr=False)
+    _active: bool = field(default=False, init=False, repr=False)
 
     @property
     def session_id(self) -> str:
         return self.transcript.session_id
+
+    @property
+    def gate(self) -> PermissionGate:
+        """Built once per session, so an 'always allow' answer survives later turns."""
+        if self._gate is None:
+            path = self.policy_path or (self.agent_dir / "permissions.toml")
+            self._gate = PermissionGate(
+                PermissionPolicy.load(path),
+                asker=self.asker if self.asker is not None else default_asker(),
+                auto_approve=self.auto_approve,
+            )
+        return self._gate
+
+    def build_context(self) -> ToolContext:
+        """The ambient state tools run against. The loop stamps the turn number on it."""
+        return ToolContext(
+            session_id=self.session_id, agent_dir=self.agent_dir, runs_dir=RUNS_DIR
+        )
 
     # ---- lifecycle -----------------------------------------------------------
 
@@ -92,7 +118,19 @@ class AgentSession:
         on_text: Callable[[str], None] | None = None,
         on_event: Callable[[Any], None] | None = None,
     ) -> LoopResult:
-        """Open a turn: record the user step, then run the loop until it terminates."""
+        """Open a turn: record the user step, then run the loop until it terminates.
+
+        One turn at a time. New input cannot interleave with a turn already in flight —
+        that is the session half of chapter 4's interrupt semantics. The executor half
+        already holds: `cancel()` awaits any `interrupt_behavior="block"` tool before the
+        loop returns, so nothing is still writing when this method exits.
+        """
+        if self._active:
+            raise RuntimeError(
+                f"session {self.session_id} is already running a turn; "
+                "wait for it to finish before submitting another"
+            )
+
         prompt = self.build_prompt(run_context)
         self.transcript.append(prompt.initial_input(message), turn=0)
 
@@ -100,13 +138,19 @@ class AgentSession:
         if self.client is None:
             self.client = make_client()
 
-        return await query_loop(
-            state,
-            client=self.client,
-            prompt=prompt,
-            registry=self.registry,
-            model=self.model,
-            max_turns=self.max_turns,
-            on_text=on_text,
-            on_event=on_event,
-        )
+        self._active = True
+        try:
+            return await query_loop(
+                state,
+                client=self.client,
+                prompt=prompt,
+                registry=self.registry,
+                model=self.model,
+                max_turns=self.max_turns,
+                ctx=self.build_context(),
+                gate=self.gate,
+                on_text=on_text,
+                on_event=on_event,
+            )
+        finally:
+            self._active = False

@@ -165,7 +165,9 @@ def test_cancel_still_closes_the_ledger():
 
     issued, outcomes = asyncio.run(scenario())
     assert issued == len(outcomes) == 4
-    assert any("cancel" in o.result for o in outcomes)
+    # Reasons are distinct: what was running was interrupted, what never started says so.
+    assert {o.reason for o in outcomes} <= {"user_interrupt", "not_started"}
+    assert all(o.is_error for o in outcomes)
 
 
 def test_timeout_produces_an_error_outcome_not_a_hang():
@@ -192,3 +194,161 @@ async def _one_outcome():
     ex = StreamingToolExecutor(registry())
     ex.submit(call("c0", "safe_tool", tag="z"))
     return (await ex.drain())[0]
+
+
+# ---- permissions, lifecycle, interrupts ---------------------------------------
+
+from harness.executor import CallState  # noqa: E402
+from harness.permissions import PermissionGate, PermissionPolicy  # noqa: E402
+from harness.tools import ToolContext  # noqa: E402
+
+RAN: list[str] = []
+
+
+@tool(concurrency_safe=True)
+def touchy(tag: str) -> str:
+    """Records that it actually executed."""
+    RAN.append(tag)
+    return f"ran:{tag}"
+
+
+@tool(concurrency_safe=True)
+def needs_ctx(ctx: ToolContext, note: str) -> str:
+    """Takes ambient context.
+
+    Args:
+        note: anything.
+    """
+    return f"{ctx.session_id}:{note}"
+
+
+@tool(concurrency_safe=False, interrupt_behavior="block")
+def must_finish(tag: str) -> str:
+    """Unsafe and must not be killed mid-flight."""
+    time.sleep(0.2)
+    INTERVALS.append((f"block:{tag}", 0.0, 0.0))
+    return "finished"
+
+
+def gated(policy: PermissionPolicy, **kw) -> StreamingToolExecutor:
+    return StreamingToolExecutor(
+        ToolRegistry([touchy, needs_ctx, must_finish, safe_tool]),
+        gate=PermissionGate(policy, **kw),
+        ctx=ToolContext(session_id="s-test"),
+    )
+
+
+def test_denied_tool_never_executes_but_still_closes_the_ledger():
+    RAN.clear()
+
+    async def scenario():
+        ex = gated(PermissionPolicy(deny=("touchy",)))
+        ex.submit(call("c0", "touchy", tag="x"))
+        return await ex.drain(), ex.states()
+
+    outcomes, states = asyncio.run(scenario())
+
+    assert RAN == [], "a denied tool must not run"
+    assert len(outcomes) == 1
+    assert outcomes[0].is_error
+    assert outcomes[0].reason == "denied"
+    assert states["c0"] is CallState.DENIED
+
+
+def test_denied_reason_is_distinct_from_cancelled():
+    async def scenario():
+        ex = gated(PermissionPolicy(deny=("touchy",)))
+        ex.submit(call("c0", "touchy", tag="x"))
+        return await ex.drain()
+
+    outcome = asyncio.run(scenario())[0]
+    assert "cancelled" not in outcome.result.lower()
+    assert "permission denied" in outcome.result
+
+
+def test_ask_without_an_asker_denies_the_call():
+    RAN.clear()
+
+    async def scenario():
+        ex = gated(PermissionPolicy(ask=("touchy",)), asker=None)
+        ex.submit(call("c0", "touchy", tag="x"))
+        return await ex.drain()
+
+    outcomes = asyncio.run(scenario())
+    assert RAN == []
+    assert outcomes[0].reason == "denied"
+
+
+def test_allowed_call_walks_the_whole_lifecycle():
+    async def scenario():
+        ex = gated(PermissionPolicy(allow=("touchy",)))
+        ex.submit(call("c0", "touchy", tag="x"))
+        queued = ex.states()["c0"]
+        outcomes = await ex.drain()
+        return queued, ex.states()["c0"], outcomes
+
+    queued, final, outcomes = asyncio.run(scenario())
+    assert queued is CallState.QUEUED
+    assert final is CallState.COMPLETED
+    assert not outcomes[0].is_error
+
+
+def test_context_is_supplied_by_the_runtime_and_hidden_from_the_model():
+    assert "ctx" not in needs_ctx.parameters["properties"]
+    assert needs_ctx.parameters["required"] == ["note"]
+    assert needs_ctx.wants_context is True
+
+    async def scenario():
+        ex = gated(PermissionPolicy(allow=("needs_ctx",)))
+        ex.submit(call("c0", "needs_ctx", note="hello"))
+        return await ex.drain()
+
+    assert asyncio.run(scenario())[0].result == "s-test:hello"
+
+
+def test_block_tools_finish_on_interrupt_while_cancel_tools_do_not():
+    INTERVALS.clear()
+
+    async def scenario():
+        ex = gated(PermissionPolicy(allow=("must_finish", "safe_tool")))
+        ex.submit(call("c0", "must_finish", tag="a"))
+        await asyncio.sleep(0.02)  # let it start
+        return await ex.cancel()
+
+    outcomes = asyncio.run(scenario())
+    assert len(outcomes) == 1
+    assert outcomes[0].result == "finished", "a block tool must not be killed mid-write"
+    assert any(name.startswith("block:") for name, _s, _e in INTERVALS)
+
+
+def test_results_follow_issue_order_not_completion_order():
+    """Execution is parallel; context evolution stays deterministic."""
+    completed: list[str] = []
+
+    @tool(concurrency_safe=True)
+    def slow_first() -> str:
+        """Finishes last."""
+        time.sleep(0.15)
+        completed.append("slow")
+        return "slow"
+
+    @tool(concurrency_safe=True)
+    def fast_second() -> str:
+        """Finishes first."""
+        completed.append("fast")
+        return "fast"
+
+    async def scenario():
+        ex = StreamingToolExecutor(
+            ToolRegistry([slow_first, fast_second]),
+            gate=PermissionGate(PermissionPolicy(default="allow")),
+        )
+        ex.submit(call("c0", "slow_first"))
+        ex.submit(call("c1", "fast_second"))
+        return await ex.drain()
+
+    outcomes = asyncio.run(scenario())
+
+    assert completed == ["fast", "slow"], "the fast call really did finish first"
+    assert [o.call_id for o in outcomes] == ["c0", "c1"], "results must stay in issue order"
+    assert [o.result for o in outcomes] == ["slow", "fast"]

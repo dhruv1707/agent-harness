@@ -158,16 +158,19 @@ def _cmd_prompt(args) -> int:
 
 
 def _cmd_run(args) -> int:
+    common = {
+        "model": args.model,
+        "max_turns": args.max_turns,
+        "policy_path": args.permissions,
+        "auto_approve": args.yes,
+    }
     try:
         if args.resume:
             session = AgentSession.resume(
-                args.resume,
-                from_node=args.from_node,
-                model=args.model,
-                max_turns=args.max_turns,
+                args.resume, from_node=args.from_node, **common
             )
         else:
-            session = AgentSession.create(model=args.model, max_turns=args.max_turns)
+            session = AgentSession.create(**common)
     except (FileNotFoundError, KeyError) as exc:
         print(f"[error] {exc}", file=sys.stderr)
         return 1
@@ -258,6 +261,17 @@ def main() -> int:
     )
     run.add_argument("--model", default=MODEL, help=f"Default: {MODEL}")
     run.add_argument("--max-turns", type=int, default=MAX_TURNS)
+    run.add_argument(
+        "--permissions",
+        type=Path,
+        default=None,
+        help="Policy file. Default: agent/permissions.toml",
+    )
+    run.add_argument(
+        "--yes",
+        action="store_true",
+        help="Approve every 'ask' without prompting. For unattended runs; think first.",
+    )
     run.add_argument("-q", "--quiet", action="store_true", help="Suppress streamed text.")
     run.set_defaults(fn=_cmd_run)
 

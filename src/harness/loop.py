@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from .config import MAX_TURNS, MODEL
@@ -28,8 +28,9 @@ from .events import (
     normalize,
 )
 from .executor import StreamingToolExecutor
+from .permissions import PermissionGate
 from .prompt import AssembledPrompt
-from .tools import ToolRegistry
+from .tools import ToolContext, ToolRegistry
 from .transcript import Transcript
 
 
@@ -98,6 +99,8 @@ async def query_loop(
     registry: ToolRegistry,
     model: str = MODEL,
     max_turns: int = MAX_TURNS,
+    ctx: ToolContext | None = None,
+    gate: PermissionGate | None = None,
     on_text: Callable[[str], None] | None = None,
     on_event: Callable[[Any], None] | None = None,
 ) -> LoopResult:
@@ -115,7 +118,9 @@ async def query_loop(
 
         state.turn += 1
         runtime = build_runtime(state, prompt, registry, model)
-        executor = StreamingToolExecutor(registry)
+        # A fresh executor per turn: a turn's ledger must not leak into the next one.
+        turn_ctx = replace(ctx or ToolContext(session_id="local"), turn=state.turn)
+        executor = StreamingToolExecutor(registry, ctx=turn_ctx, gate=gate)
 
         text_buffer: list[str] = []
         stream_error: str | None = None

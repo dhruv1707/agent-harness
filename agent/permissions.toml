@@ -1,0 +1,25 @@
+# Which tools the agent may run, and which need a human first.
+#
+# Precedence: deny > ask > allow. Every matching rule is evaluated and the most
+# restrictive wins, so a narrow allow cannot punch a hole in a broad deny.
+#
+# Patterns are exact names, or a trailing * for a prefix ("mcp__triplewhale__*").
+
+# What happens to a tool no rule mentions. Keep this at "ask" — a tool nobody has
+# thought about should stop and check, not run.
+default = "ask"
+
+# Read-only. Nothing here can change the account, the files, or the outside world.
+allow = [
+  "list_memory",
+  "read_memory",
+]
+
+# Writes, or anything with a side effect worth a glance before it happens.
+ask = [
+  "append_run_log",
+]
+
+# Never, whatever the model argues. Nothing yet — this fills in as tools arrive that
+# should exist for reading but never for acting.
+deny = []
