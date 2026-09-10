@@ -213,11 +213,29 @@ def test_config_loads_servers(tmp_path):
     assert servers["other"].enabled is False
 
 
-def test_the_shipped_config_names_both_servers():
+def test_the_shipped_config_is_atria_only():
+    """Triple Whale was dropped: mcpEnabled is false for this store, so every data tool
+    returns a plan error, and Atria covers the ranking it was wanted for."""
     servers = {s.name: s for s in load_servers()}
-    assert "triplewhale" in servers and "atria" in servers
-    assert servers["triplewhale"].url == "https://mcp.triplewhale.com/v1/mcp"
+    assert set(servers) == {"atria"}
     assert servers["atria"].url == "https://api.tryatria.com/mcp"
+
+
+def test_the_shipped_config_loads_only_the_workflow_tools():
+    atria = {s.name: s for s in load_servers()}["atria"]
+    assert len(atria.tools) == 12, atria.tools
+    # The dependency chain that produces a hook, plus the pattern call.
+    for required in (
+        "list_ad_account_ads",
+        "get_ad_account_ad",
+        "get_ad_account_video_transcript",
+        "list_ad_account_creative_tags",
+        "get_owned_brand",
+    ):
+        assert required in atria.tools
+    # Ids are fixed in CLAUDE.md, so the discovery calls are not loaded.
+    assert "list_ad_accounts" not in atria.tools
+    assert "list_owned_brands" not in atria.tools
 
 
 def test_tokens_land_in_the_gitignored_auth_dir():
@@ -282,3 +300,30 @@ def test_the_bridge_connects_whatever_it_is_handed():
     clients, failures = asyncio.run(scenario())
     assert clients == []
     assert "x" in failures, "a server it could not reach must be reported, never skipped"
+
+
+def test_oauth_does_not_open_a_browser_without_a_terminal(monkeypatch):
+    """Tokens refresh lazily, so an expiry can land mid-run. An unattended job must fail
+    with the command to run, not hang on a browser nobody is watching."""
+    import pytest
+
+    from harness import mcp as mcp_module
+
+    opened = []
+    monkeypatch.setattr(mcp_module.webbrowser, "open", lambda url: opened.append(url))
+    monkeypatch.setattr(mcp_module.sys.stdin, "isatty", lambda: False)
+
+    with pytest.raises(RuntimeError, match="no terminal"):
+        asyncio.run(mcp_module._open_browser("https://auth.example.com/authorize"))
+    assert opened == [], "no browser may be launched when nobody is there"
+
+
+def test_oauth_opens_a_browser_when_interactive(monkeypatch):
+    from harness import mcp as mcp_module
+
+    opened = []
+    monkeypatch.setattr(mcp_module.webbrowser, "open", lambda url: opened.append(url))
+    monkeypatch.setattr(mcp_module.sys.stdin, "isatty", lambda: True)
+
+    asyncio.run(mcp_module._open_browser("https://auth.example.com/authorize"))
+    assert opened == ["https://auth.example.com/authorize"]

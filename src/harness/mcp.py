@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 import tomllib
 import webbrowser
 from contextlib import AsyncExitStack
@@ -137,6 +138,17 @@ class FileTokenStorage(TokenStorage):
 
 
 async def _open_browser(authorization_url: str) -> None:
+    """Open the authorize page — but only if someone is there to complete it.
+
+    Tokens refresh lazily, so an expiry can land in the middle of any run. Launching a
+    browser nobody is watching would hang an unattended job on a prompt that will never be
+    answered; failing with the command to run is the honest outcome.
+    """
+    if not sys.stdin.isatty():
+        raise RuntimeError(
+            "this MCP server needs authorization and there is no terminal to do it in — "
+            "run `harness mcp <server>` interactively to sign in, then retry"
+        )
     print(f"\n  opening browser to authorize:\n  {authorization_url}\n", flush=True)
     webbrowser.open(authorization_url)
 

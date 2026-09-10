@@ -14,13 +14,6 @@ allow = [
   "list_memory",
   "read_memory",
 
-  # Triple Whale. Allowed as a group, and the justification is the OAuth scope rather
-  # than trust: the connection is granted moby:read, so no tool on it can mutate the
-  # account even if the model asks it to. All 11 also carry read_only_hint, so they
-  # parallelise. Note run-sql executes arbitrary SQL — read-only SELECT, enforced
-  # server-side — which is why the scope matters more than the tool list here.
-  "mcp__triplewhale__*",
-
   # Atria reads. Everything that only looks: the ad library, the workspace's own ad
   # accounts and their metrics, creative tags, cached transcripts, boards, notes.
   # get_library_ad_transcript is free; transcribe_* is not, which is why they are split.
@@ -60,7 +53,7 @@ deny = [
 ]
 
 # ---------------------------------------------------------------------------
-# MCP tools (Triple Whale, Atria)
+# MCP tools (Atria)
 #
 # Bridged tools are named mcp__<server>__<tool>, and patterns take a trailing *.
 # They are deliberately NOT listed yet: run `harness mcp` to sign in and print the

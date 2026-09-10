@@ -6,9 +6,15 @@ loaded on every run, so keep it short — detail belongs in `memory/` topic file
 ## The account
 
 - **Brand:** Hugl — U-shaped cooling body pillow, DTC
-- **Primary efficiency metric:** _(fill in — e.g. blended ROAS, CAC, MER)_
+- **Primary efficiency metric:** `roas` — the default ranking. Use `thumbstop_ratio`
+  ("Thumbstop (Hook rate)") instead when the request is about hooks or attention, since
+  that isolates the first three seconds from everything downstream.
 - **Default lookback window:** 7 days
-- **Data sources:** Triple Whale (performance), Atria (creative library and competitive)
+- **Data sources:** Atria only. Triple Whale was removed — its MCP access is gated on a
+  plan entitlement this store does not have.
+- **Atria ad account id:** `1fb10475eb5b493391f5ffd439ed7fa2` (Meta, USD,
+  America/Los_Angeles). This is Atria's internal UUID, not the `act_…` platform id.
+- **Atria brand id:** `d186047e117e4d2c830a6224d3ccbeec`
 
 ## Working agreements
 
@@ -22,5 +28,5 @@ loaded on every run, so keep it short — detail belongs in `memory/` topic file
 
 - Ads are referenced as `<ad_id> — <ad_name>`, always both.
 - Windows are stated explicitly as dates, never as "last week".
-- When Triple Whale and Atria disagree on a metric, Triple Whale is authoritative for
-  spend and revenue; Atria is authoritative for creative assets and metadata.
+- Metrics are named by id, never by display name — display names are user-editable on the
+  account and can collide.

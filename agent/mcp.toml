@@ -7,51 +7,56 @@
 #
 # Tools are registered as mcp__<server>__<tool>, which is what the wildcard patterns in
 # permissions.toml match against.
-
-[servers.triplewhale]
-url = "https://mcp.triplewhale.com/v1/mcp"
-# OAuth2 is read-only (moby:read), needs no key, and can be revoked. Triple Whale
-# recommends it over the API key wherever the client supports it — we do.
-# To use a key instead: auth = "header", header_name = "x-api-key",
-# api_key_env = "TRIPLEWHALE_API_KEY"
-auth = "oauth"
+#
+# Triple Whale was removed. Its MCP access is gated on a plan entitlement the Plufl store
+# does not have (mcpEnabled: false — every data tool returns a plan error), and Atria's
+# list_ad_account_ads / list_ad_account_metrics cover the ranking it was wanted for.
 
 [servers.atria]
 url = "https://api.tryatria.com/mcp"
-# Atria's MCP server is OAuth 2.1 only. The X-API-Key on their site is for the REST API.
+# OAuth 2.1 only. The X-API-Key on Atria's site is for their REST API, not MCP.
 auth = "oauth"
 enabled = true
 
-# Atria exposes 45 tools. Loading all of them costs ~27k prefix tokens on every request
-# and gives the model 45 things to choose between; Atria's own `discover_apis` exists
-# because clients are expected to load a subset. These are the ones the daily job uses,
-# grouped by workflow step. Delete this list to load everything.
+# Atria exposes 45 tools. Every declaration costs prefix tokens on every request and gives
+# the model one more thing to choose between, so this loads only what the daily job needs.
+# Atria's own `discover_apis` exists because clients are expected to load a subset.
+# Delete this list to load everything.
 tools = [
-  # 1. Pull — the account's own ads and how they performed
-  "list_ad_accounts",
-  "list_ad_account_ads",
+  # --- 1. Rank the account's own ads -------------------------------------------
+  # The account id is fixed in CLAUDE.md, so list_ad_accounts is not needed.
+  # metrics is a *catalog*, not values: it confirms which metric ids exist before
+  # one is passed to sort_by.
   "list_ad_account_metrics",
-  "get_ad_account_ad",
-  "get_ad_account_summary",
+  "list_ad_account_ads",
 
-  # 2. Read the hooks — creative tagging and transcripts.
-  #    list_ad_account_creative_tags carries what the creative does AND which of it works.
-  "list_ad_account_creative_tags",
-  "get_ad_account_creative_tags",
+  # --- 2. Read the hook --------------------------------------------------------
+  # get_ad_account_ad yields creative.videos[].video_id, which the transcript
+  # calls need. The GET transcript is free and cache-only; transcribe costs
+  # credits and blocks 30-60s, so it is gated behind `ask`.
+  "get_ad_account_ad",
   "get_ad_account_video_transcript",
   "transcribe_ad_account_video",
 
-  # 3. Find the pattern — group and rank ads by a creative dimension
-  "list_library_taggings",
+  # --- 3. Find the pattern across winners --------------------------------------
+  # list_ad_account_creative_tags groups the window's spend and performance across
+  # ten dimensions including visual hook. get_ad_account_creative_tags drills into
+  # specific assets, up to 20 ids per call.
+  "list_ad_account_creative_tags",
+  "get_ad_account_creative_tags",
+
+  # --- 4. Competitor library ---------------------------------------------------
+  # get_library_ad returns media files, not what is said in them; for video ads the
+  # hook lives in the transcript, which is free and safe across a whole page.
   "search_library_ads",
   "get_library_ad",
-  "get_library_ad_creative_tags",
   "get_library_ad_transcript",
 
-  # 4. Write — brand and product facts.
-  #    Note get_owned_brand also carries a voice; memory/brand-voice.md stays the
-  #    authority, since it is derived from scripts that actually shipped.
-  "list_owned_brands",
+  # --- 5. Brand and product facts ----------------------------------------------
+  # The brand id is fixed in CLAUDE.md, so list_owned_brands is not needed.
+  # get_owned_brand carries avoid_words, which is a compliance boundary.
+  # list_owned_brand_products carries customer_awareness_levels and
+  # market_sophistication_levels — what decides whether a straight claim still lands.
   "get_owned_brand",
   "list_owned_brand_products",
 ]

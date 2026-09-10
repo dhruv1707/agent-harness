@@ -2,19 +2,89 @@
 
 ## Protocol
 
-**1. Pull.** Get top-performing ads for the run's window from the connected sources. Rank by
-the account's primary efficiency metric; if the run context does not name one, ask.
+The account id and brand id are in the governance file. You do not need to look them up.
 
-**2. Read the hooks.** For each winner, get the actual creative — transcript, first frames,
-or on-screen text. Write down the literal first line. Classify it against the taxonomy in
-`memory/hook-patterns.md`; if it does not fit, name the new pattern and say so.
+**1. Rank.** Confirm the metric id with `list_ad_account_metrics`, then call
+`list_ad_account_ads` with `period` (default `last_7d`), `sort_by`, and `limit`.
 
-**3. Find the pattern across winners.** Do not work ad-by-ad in isolation. State what the top
-ads share — a hook family, a format, a claim, a narrator. That shared thing is what you
-iterate on. If the winners share nothing, say so plainly; that is a real finding.
+Choose `sort_by` from what was asked:
 
-**4. Write scripts.** Each one is a shootable variation on the pattern, written the way
-`memory/brief-samples.md` writes them.
+| The request is about | `sort_by` | also pass in `metrics` |
+|---|---|---|
+| performance, revenue, "top performing" | `roas` | `thumbstop_ratio` |
+| hooks, attention, "what's stopping the scroll" | `thumbstop_ratio` | `roas` |
+
+Always pass the other one in `metrics` so both land in the response and the Hooks table can
+show both. When they disagree — a high-`roas` ad with a weak `thumbstop_ratio` — say so.
+That ad won on its offer, not its opening, and its hook is not the one to iterate on.
+
+**2. Read the hooks.** For each winner, `get_ad_account_ad` gives the full creative and the
+`creative.videos[].video_id` you need next. Then `get_ad_account_video_transcript` for the
+spoken words — that transcript *is* the hook, verbatim.
+
+**3. Find the pattern.** `list_ad_account_creative_tags` groups the window's spend and
+performance across ten dimensions, one of which is visual hook. Use it to see what the
+winners share rather than reasoning ad-by-ad. Each bucket carries `top_creatives` with ids;
+pass up to 20 at a time to `get_ad_account_creative_tags` for the per-asset detail.
+
+**4. Write scripts.** Read `get_owned_brand` and `list_owned_brand_products` before
+drafting, then write the way `memory/brief-samples.md` writes.
+
+Competitor work, when asked for: `search_library_ads` → `get_library_ad` for the full
+creative → `get_library_ad_transcript` for what is actually said. That transcript call is
+free, so run it across the whole page.
+
+## Reading this data honestly
+
+These are properties of the source, not style preferences. Each one is a way to be
+confidently wrong.
+
+**Ranking and windows**
+
+- Name metrics by **id**, never by display name. Display names are user-editable on the
+  account and can collide.
+- The most recent days are still settling — ad platforms keep revising conversion data after
+  a day closes. A window ending yesterday is the least reliable, and the same day re-read
+  later can differ. Say so when it matters to the conclusion.
+
+**Creative tags**
+
+- **Buckets overlap and must never be summed.** An asset carrying three themes is counted
+  under all three, so adding bucket spends produces a number larger than the account's
+  total. Compare buckets against each other, never against the account.
+- Read `coverage.tagged_spend_share` before generalising. Tagging runs over the highest-spend
+  creatives and accumulates down the ranking, so it never covers an account exhaustively.
+  A low asset-count share with a high spend share is normal and fine; say which you are
+  reasoning from.
+- Check `distinct_tags` before treating a category as a grouping. `theme` and `media_format`
+  settle into a stable vocabulary. `usp` and `key_message` are near-unique per asset, so
+  their buckets hold one asset each and ranking them ranks nothing.
+- `untagged_reason` is not "this creative has no angle". `not_tagged_yet` means tagging has
+  not reached it, `incomplete_tags` means it was withheld to stay comparable,
+  `not_in_account` means the id is from somewhere else. In the library,
+  `advertiser_not_followed` means nobody is tracking that advertiser yet.
+- Carousel and collection ads are never tagged and never will be. Their absence from a
+  tag bucket is not a finding.
+- Creative tagging is Meta only. A TikTok account returns empty categories — report that as
+  a gap, not as an absence of pattern.
+
+**Transcripts**
+
+- `get_ad_account_video_transcript` and `get_library_ad_transcript` are free cache reads and
+  never charge. Run them across every candidate first.
+- `transcribe_ad_account_video` costs credits and blocks for 30–60 seconds. Only pay for ads
+  you actually intend to brief, after the free lookup has failed for them. If approval is
+  refused, brief from what you have and list the ads you could not read.
+
+**Brand**
+
+- `avoid_words` from `get_owned_brand` is frequently a compliance boundary rather than a
+  preference. Read it before drafting, not after.
+- `customer_awareness_levels` and `market_sophistication_levels` on a product decide whether
+  a straight claim still lands or the angle has to change. A sophisticated market has heard
+  the claim already; opening with it wastes the hook.
+- Everything the brand tools return is what the brand says about itself. It describes intent,
+  not results. What the advertising actually did comes from the ad-account tools.
 
 ## What a script is
 
@@ -39,18 +109,20 @@ Length: roughly the length of the approved samples. Do not pad to hit a beat cou
 
 ```
 ## What won — <window>
-One paragraph. The pattern across the winners, with ad ids.
+One paragraph. The pattern across the winners, with ad ids. Name the ranking metric you
+used. If tag coverage was partial, say what share of spend it covered.
 
 ## Hooks
-| Ad | Hook (verbatim first line) | Pattern | Metric |
-The winners. Mark UNVERIFIED where you did not see the creative.
+| Ad | Hook (verbatim first line) | Pattern | ROAS | Thumbstop |
+The winners. Mark UNVERIFIED where you did not read the creative, and say why —
+no cached transcript, untagged, carousel.
 
 ## Scripts
 The scripts.
 
 ## Flags
-Anything a human must decide: claims to approve, data gaps, source errors.
-Omit if there is nothing to flag.
+Anything a human must decide: claims to approve, data gaps, refused approvals, source
+errors. Omit if there is nothing to flag.
 ```
 
 Each script is headed by two metadata lines and then the script itself. **The metadata is for
