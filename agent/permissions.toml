@@ -13,6 +13,13 @@ default = "ask"
 allow = [
   "list_memory",
   "read_memory",
+
+  # Triple Whale. Allowed as a group, and the justification is the OAuth scope rather
+  # than trust: the connection is granted moby:read, so no tool on it can mutate the
+  # account even if the model asks it to. All 11 also carry read_only_hint, so they
+  # parallelise. Note run-sql executes arbitrary SQL — read-only SELECT, enforced
+  # server-side — which is why the scope matters more than the tool list here.
+  "mcp__triplewhale__*",
 ]
 
 # Writes, or anything with a side effect worth a glance before it happens.

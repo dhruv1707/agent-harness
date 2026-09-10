@@ -288,14 +288,22 @@ class MCPBridge:
 
     servers: list[MCPServerConfig] = field(default_factory=load_servers)
     clients: dict[str, Client] = field(default_factory=dict, init=False)
+    #: Servers that would not connect, name -> why. A dead source degrades the run; it
+    #: does not end it. The same rule the agent's own prompt gives it about unreachable
+    #: data sources applies to the runtime that feeds it.
+    failures: dict[str, str] = field(default_factory=dict, init=False)
     _stack: AsyncExitStack | None = field(default=None, init=False, repr=False)
 
     async def __aenter__(self) -> MCPBridge:
         self._stack = AsyncExitStack()
         await self._stack.__aenter__()
         for server in self.servers:
-            if server.enabled:
+            if not server.enabled:
+                continue
+            try:
                 await self._connect(server)
+            except Exception as exc:
+                self.failures[server.name] = f"{type(exc).__name__}: {exc}"
         return self
 
     async def __aexit__(self, *exc) -> None:

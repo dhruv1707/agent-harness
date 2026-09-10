@@ -209,6 +209,8 @@ def _cmd_run(args) -> int:
                 session.registry.register(entry)
             names = ", ".join(sorted(bridge.clients)) or "none"
             print(f"[mcp] {len(discovered)} tools from {names}", file=sys.stderr)
+            for failed, why in bridge.failures.items():
+                print(f"[mcp] {failed} UNAVAILABLE — {why[:120]}", file=sys.stderr)
             return await session.submit(
                 args.task, on_text=None if args.quiet else on_text, on_event=on_event
             )
@@ -243,16 +245,22 @@ def _cmd_mcp(args) -> int:
     Run this once per server to sign in, and to learn the real tool names before writing
     permission rules for them.
     """
-    servers = [s for s in load_servers(args.mcp_config) if s.enabled]
+    configured = load_servers(args.mcp_config)
     if args.server:
-        servers = [s for s in servers if s.name == args.server]
+        # Naming one explicitly is consent to connect it, enabled flag or not — this is
+        # how you authorize a server before turning it on for runs.
+        servers = [s for s in configured if s.name == args.server]
+    else:
+        servers = [s for s in configured if s.enabled]
     if not servers:
-        print("[error] no matching enabled servers in agent/mcp.toml", file=sys.stderr)
+        print("[error] no matching servers in agent/mcp.toml", file=sys.stderr)
         return 1
 
     async def go() -> int:
         async with MCPBridge(servers=servers) as bridge:
             tools = await bridge.discover()
+            for failed, why in bridge.failures.items():
+                print(f"\n{failed}  UNAVAILABLE\n  {why[:200]}", file=sys.stderr)
             for name in sorted(bridge.clients):
                 owned = [t for t in tools if t.name.startswith(f"mcp__{name}__")]
                 print(f"\n{name}  ({len(owned)} tools)")
