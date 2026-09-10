@@ -71,10 +71,18 @@ confidently wrong.
 **Transcripts**
 
 - `get_ad_account_video_transcript` and `get_library_ad_transcript` are free cache reads and
-  never charge. Run them across every candidate first.
-- `transcribe_ad_account_video` costs credits and blocks for 30–60 seconds. Only pay for ads
-  you actually intend to brief, after the free lookup has failed for them. If approval is
-  refused, brief from what you have and list the ads you could not read.
+  never charge. Run them across every candidate first, before paying for anything.
+- **A winner's hook is the point of the run.** If the free lookup misses on an ad you are
+  reporting as a winner, transcribe it. Do not skip it because no script is being written
+  this time — a hooks-only run is exactly the run that needs the hooks.
+- `transcribe_ad_account_video` costs credits and blocks for 30–60 seconds, so cap it at the
+  **top 5 winners** by the ranking metric. Past that, report the rest UNVERIFIED with the
+  reason rather than spending more.
+- Before the first paid transcription, say in one line how many you are about to run and
+  why. If approval is refused, carry on with what you have and list what you could not read.
+- The public ad library is a free fallback, not a substitute: if the same creative is
+  running publicly, `get_library_ad_transcript` may have it. Try that before paying, but do
+  not spend turns hunting for a match that probably does not exist.
 
 **Brand**
 
@@ -122,7 +130,9 @@ The scripts.
 
 ## Flags
 Anything a human must decide: claims to approve, data gaps, refused approvals, source
-errors. Omit if there is nothing to flag.
+errors. Always state transcription cost here — how many were served free from cache and
+how many were paid for — so the credit cost of the run is visible. Omit the section only
+if there is genuinely nothing to flag.
 ```
 
 Each script is headed by two metadata lines and then the script itself. **The metadata is for
