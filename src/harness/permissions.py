@@ -50,7 +50,7 @@ class PermissionResult:
         return f"{self.decision}{via}: {self.reason}" if self.reason else f"{self.decision}{via}"
 
 
-def _matches(pattern: str, name: str) -> bool:
+def matches_pattern(pattern: str, name: str) -> bool:
     """Exact match, or a trailing `*` prefix match (`mcp__triplewhale__*`)."""
     if pattern.endswith("*"):
         return name.startswith(pattern[:-1])
@@ -80,7 +80,7 @@ class PermissionPolicy:
             ("allow", self.allow),
         ):
             for pattern in patterns:
-                if _matches(pattern, tool_name):
+                if matches_pattern(pattern, tool_name):
                     matched.append((decision, pattern))  # type: ignore[arg-type]
 
         if not matched:

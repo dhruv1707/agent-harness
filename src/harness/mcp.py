@@ -30,6 +30,7 @@ from mcp.client.streamable_http import create_mcp_http_client, streamable_http_c
 from mcp.shared.auth import OAuthClientMetadata, OAuthClientInformationFull, OAuthToken
 
 from .config import AGENT_DIR, ROOT
+from .permissions import matches_pattern
 from .tools import Tool
 
 #: Where OAuth tokens land. Gitignored — these are credentials.
@@ -64,6 +65,10 @@ class MCPServerConfig:
     header_name: str = "x-api-key"
     api_key_env: str | None = None
     enabled: bool = True
+    #: Which of the server's tools to load. Empty means all of them. Names or `prefix*`.
+    #: Every declaration costs prefix tokens on every request and competes for the
+    #: model's attention, so a big server is worth narrowing to the job.
+    tools: tuple[str, ...] = ()
 
     @property
     def token_path(self) -> Path:
@@ -84,6 +89,7 @@ def load_servers(path: Path | None = None) -> list[MCPServerConfig]:
             header_name=entry.get("header_name", "x-api-key"),
             api_key_env=entry.get("api_key_env"),
             enabled=entry.get("enabled", True),
+            tools=tuple(entry.get("tools", ())),
         )
         for name, entry in (data.get("servers") or {}).items()
     ]
@@ -337,8 +343,11 @@ class MCPBridge:
         """Every connected server's tools, wrapped as ordinary local tools."""
         discovered: list[Tool] = []
         for name, client in self.clients.items():
+            wanted = next((s.tools for s in self.servers if s.name == name), ())
             listing = await client.list_tools()
             for mcp_tool in listing.tools:
+                if wanted and not any(matches_pattern(p, mcp_tool.name) for p in wanted):
+                    continue
                 discovered.append(self._wrap(name, client, mcp_tool))
         return discovered
 
