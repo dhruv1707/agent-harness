@@ -110,6 +110,34 @@ class Transcript:
         """The linear history to send as `input`. This is the runtime context."""
         return [node.step for node in self.path_to_root(node_id)]
 
+    def all_nodes(self) -> list[Node]:
+        """Every node ever recorded, in write order. The step-level view is `all_steps`."""
+        return [self._nodes[node_id] for node_id in self._order]
+
+    def lineage(self, node_id: str | None = None) -> list[Node]:
+        """The current walk, continued back through every compaction it crosses.
+
+        Three different questions, three different answers. `steps()` is what the model can
+        see now. `all_steps()` is everything ever written, across branches it abandoned.
+        This is the third: what *this* line of work was actually told — the live path, plus
+        the history each boundary replaced, which the tree records as `compacted_from`.
+
+        It is the right source for anything asking "what has this run been working from",
+        because the live path forgets and the full set remembers things that never happened
+        on this branch.
+        """
+        chain = self.path_to_root(node_id)
+        out: list[Node] = []
+        seen: set[str] = set()
+        while chain:
+            out = chain + out
+            prior = chain[0].meta.get("compacted_from")
+            if not prior or prior in seen or prior not in self._nodes:
+                break
+            seen.add(prior)
+            chain = self.path_to_root(prior)
+        return out
+
     def all_steps(self) -> list[dict]:
         """Every step ever recorded, in write order — across branches and compactions.
 

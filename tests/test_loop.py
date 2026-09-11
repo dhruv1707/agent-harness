@@ -73,7 +73,7 @@ def done(tokens=10):
 # ---- fixtures ----------------------------------------------------------------
 
 
-@tool(concurrency_safe=True)
+@tool(concurrency_safe=True, read_only=True)
 def ping(tag: str) -> str:
     """A trivial tool."""
     return f"pong:{tag}"
@@ -277,7 +277,7 @@ def test_tool_body_starts_before_the_stream_finishes():
     """
     log: list[str] = []
 
-    @tool(concurrency_safe=True)
+    @tool(concurrency_safe=True, read_only=True)
     async def watched() -> str:
         """Records when its body actually begins."""
         log.append("TOOL_BODY_START")

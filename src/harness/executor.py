@@ -169,7 +169,9 @@ class StreamingToolExecutor:
         try:
             # Partitioned already; authorize before executing.
             self._states[call.call_id] = CallState.AWAITING_APPROVAL
-            verdict = await self.gate.check(call.call_id, call.name, call.arguments)
+            verdict = await self.gate.check(
+                call.call_id, call.name, call.arguments, read_only=tool.read_only
+            )
             if not verdict.allowed:
                 self._states[call.call_id] = CallState.DENIED
                 self._close(

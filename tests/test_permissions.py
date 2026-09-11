@@ -114,14 +114,14 @@ def test_ask_without_an_asker_denies():
 
 def test_ask_prompts_and_honours_yes():
     gate = PermissionGate(
-        PermissionPolicy(ask=("write_thing",)), asker=lambda name, args: "y"
+        PermissionPolicy(ask=("write_thing",)), asker=lambda request: "y"
     )
     assert run(gate.check("c1", "write_thing", {})).allowed
 
 
 def test_ask_prompts_and_honours_no():
     gate = PermissionGate(
-        PermissionPolicy(ask=("write_thing",)), asker=lambda name, args: "n"
+        PermissionPolicy(ask=("write_thing",)), asker=lambda request: "n"
     )
     result = run(gate.check("c1", "write_thing", {}))
     assert result.denied
@@ -131,8 +131,8 @@ def test_ask_prompts_and_honours_no():
 def test_always_persists_for_the_session():
     calls: list[str] = []
 
-    def asker(name, args):
-        calls.append(name)
+    def asker(request):
+        calls.append(request.tool_name)
         return "a"
 
     gate = PermissionGate(PermissionPolicy(ask=("write_thing",)), asker=asker)
@@ -151,7 +151,7 @@ def test_deny_is_sticky_for_a_call_id():
     """Chapter 4: deny is sticky for this tool_use_id — no silent retry to allow."""
     answers = iter(["n", "y"])
     gate = PermissionGate(
-        PermissionPolicy(ask=("write_thing",)), asker=lambda name, args: next(answers)
+        PermissionPolicy(ask=("write_thing",)), asker=lambda request: next(answers)
     )
 
     async def scenario():
@@ -166,7 +166,7 @@ def test_deny_is_sticky_for_a_call_id():
 
 
 def test_auto_approve_skips_the_prompt():
-    def asker(name, args):
+    def asker(request):
         raise AssertionError("should not be asked")
 
     gate = PermissionGate(

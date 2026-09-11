@@ -28,6 +28,12 @@ allow = [
 ]
 
 # Writes, or anything with a side effect worth a glance before it happens.
+# A decision reserved to a person: asked like `ask`, but `--yes` may not answer it, and
+# approving once is not approving the next one. A plan is the only thing here — approving
+# a plan is the moment a run stops being read-only, so it should never happen because a
+# flag was passed to a cron job.
+confirm = ["submit_plan"]
+
 ask = [
   "append_run_log",
 

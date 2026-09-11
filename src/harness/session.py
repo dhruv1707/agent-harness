@@ -17,7 +17,7 @@ from typing import Any
 from .compaction import summarize
 from .config import AGENT_DIR, MAX_TURNS, MODEL, RUNS_DIR
 from .loop import LoopResult, LoopState, query_loop
-from .permissions import Asker, PermissionGate, PermissionPolicy, default_asker
+from .permissions import Asker, PermissionGate, PermissionPolicy, PlanState, default_asker
 from .session_memory import SessionMemory
 from .prompt import AssembledPrompt, RunContext, build_effective_system_prompt
 from .tools import ToolContext, ToolRegistry, default_registry
@@ -50,6 +50,15 @@ class AgentSession:
     mcp_instructions: dict[str, str] = field(default_factory=dict)
     #: None means "pick a terminal asker if someone is there to answer".
     asker: Asker | None = None
+    #: Start in plan mode: research freely, change nothing, until a plan is approved.
+    plan: bool = False
+
+    #: The gate enforces plan mode and `submit_plan` ends it, so both must hold the same
+    #: object. Built here, once, for exactly that reason.
+    _plan_state: PlanState = field(init=False, repr=False, default=None)  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        self._plan_state = PlanState(active=self.plan)
 
     _gate: PermissionGate | None = field(default=None, init=False, repr=False)
     _active: bool = field(default=False, init=False, repr=False)
@@ -67,13 +76,17 @@ class AgentSession:
                 PermissionPolicy.load(path),
                 asker=self.asker if self.asker is not None else default_asker(),
                 auto_approve=self.auto_approve,
+                plan=self._plan_state,
             )
         return self._gate
 
     def build_context(self) -> ToolContext:
         """The ambient state tools run against. The loop stamps the turn number on it."""
         return ToolContext(
-            session_id=self.session_id, agent_dir=self.agent_dir, runs_dir=RUNS_DIR
+            session_id=self.session_id,
+            agent_dir=self.agent_dir,
+            runs_dir=RUNS_DIR,
+            plan=self._plan_state,
         )
 
     # ---- lifecycle -----------------------------------------------------------
@@ -115,6 +128,7 @@ class AgentSession:
                 run_id=self.session_id,
                 sources=tuple(sorted(t.name for t in self.registry)),
                 max_turns=self.max_turns,
+                plan_mode=self._plan_state.active,
             ),
         )
 
@@ -187,6 +201,7 @@ class AgentSession:
                 gate=self.gate,
                 writer=writer,
                 budget=self.budget,
+                memory_dir=self.agent_dir / "memory",
                 on_text=on_text,
                 on_event=on_event,
             )

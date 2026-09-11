@@ -13,7 +13,7 @@ DELAY = 0.08
 INTERVALS: list[tuple[str, float, float]] = []
 
 
-@tool(concurrency_safe=True)
+@tool(concurrency_safe=True, read_only=True)
 def safe_tool(tag: str) -> str:
     """A concurrency-safe tool."""
     start = time.monotonic()
@@ -22,7 +22,7 @@ def safe_tool(tag: str) -> str:
     return f"safe:{tag}"
 
 
-@tool(concurrency_safe=False)
+@tool(concurrency_safe=False, read_only=False)
 def unsafe_tool(tag: str) -> str:
     """A tool that must run alone."""
     start = time.monotonic()
@@ -31,13 +31,13 @@ def unsafe_tool(tag: str) -> str:
     return f"unsafe:{tag}"
 
 
-@tool(concurrency_safe=True)
+@tool(concurrency_safe=True, read_only=True)
 def boom() -> str:
     """Always raises."""
     raise ValueError("tool exploded")
 
 
-@tool(concurrency_safe=True)
+@tool(concurrency_safe=True, read_only=True)
 async def forever() -> str:
     """Never finishes in time.
 
@@ -205,14 +205,14 @@ from harness.tools import ToolContext  # noqa: E402
 RAN: list[str] = []
 
 
-@tool(concurrency_safe=True)
+@tool(concurrency_safe=True, read_only=True)
 def touchy(tag: str) -> str:
     """Records that it actually executed."""
     RAN.append(tag)
     return f"ran:{tag}"
 
 
-@tool(concurrency_safe=True)
+@tool(concurrency_safe=True, read_only=True)
 def needs_ctx(ctx: ToolContext, note: str) -> str:
     """Takes ambient context.
 
@@ -222,7 +222,7 @@ def needs_ctx(ctx: ToolContext, note: str) -> str:
     return f"{ctx.session_id}:{note}"
 
 
-@tool(concurrency_safe=False, interrupt_behavior="block")
+@tool(concurrency_safe=False, read_only=False, interrupt_behavior="block")
 def must_finish(tag: str) -> str:
     """Unsafe and must not be killed mid-flight."""
     time.sleep(0.2)
@@ -325,14 +325,14 @@ def test_results_follow_issue_order_not_completion_order():
     """Execution is parallel; context evolution stays deterministic."""
     completed: list[str] = []
 
-    @tool(concurrency_safe=True)
+    @tool(concurrency_safe=True, read_only=True)
     def slow_first() -> str:
         """Finishes last."""
         time.sleep(0.15)
         completed.append("slow")
         return "slow"
 
-    @tool(concurrency_safe=True)
+    @tool(concurrency_safe=True, read_only=True)
     def fast_second() -> str:
         """Finishes first."""
         completed.append("fast")

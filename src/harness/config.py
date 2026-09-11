@@ -138,6 +138,26 @@ MAX_SECTION_TOKENS = 2_000
 MAX_SESSION_MEMORY_TOKENS = 12_000
 
 
+# ---- attachments -------------------------------------------------------------
+#
+# Attachments are re-rendered into every rebuilt context — each compaction boundary and
+# each resume — so unlike a tool result they are paid for repeatedly. Unlike the brief, a
+# shed attachment is recoverable: the agent can read the file again. That asymmetry is why
+# this budget is tight where the brief's is generous.
+
+#: Whole-set cap for everything re-attached to a rebuilt context.
+MAX_ATTACHMENT_TOKENS = 8_000
+
+#: Per attached file. A topic file may reach MAX_MEMORY_FILE_BYTES (20,000 B, roughly
+#: 5,000 tokens) and three of those would be the entire budget, so no single file takes
+#: more than this share of it.
+MAX_ATTACHED_FILE_TOKENS = 2_500
+
+#: A plan refused twice is not going to be approved on the third try. Same shape as
+#: MAX_CONSECUTIVE_COMPACT_FAILURES: you may fail, but not indefinitely.
+MAX_PLAN_ATTEMPTS = 2
+
+
 def approx_tokens(text: str) -> int:
     """Rough token count at 4 chars/token.
 

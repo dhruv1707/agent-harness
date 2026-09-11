@@ -64,8 +64,17 @@ def _step_text(step: dict) -> str:
 def strip_for_summary(steps: list[dict]) -> list[dict]:
     """Replace expensive content with labels. Returns a copy; the input is untouched."""
     cleaned: list[dict] = []
-    for step in steps:
+    for index, step in enumerate(steps):
         kind = step.get("type")
+
+        # The first step is the root of the walk, and on every compaction after the first
+        # that root is the *previous boundary* — the task, the attachments and the brief.
+        # Eliding it at 1,500 bytes threw away everything a 12,000-token brief had just
+        # been written to preserve, `## Next` included, on the second compaction of any
+        # long run. A summary of a summary is the one thing that must not be truncated.
+        if index == 0 and kind == "user_input":
+            cleaned.append(step)
+            continue
 
         if kind == "thought":
             # Signatures are large base64 blobs and carry nothing a summary can use.

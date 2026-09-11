@@ -38,6 +38,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from typing import Any
 from decimal import ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal, InvalidOperation
 
 _NUMBER = re.compile(r"(?<![\w.\-])\$?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?(%?)")
@@ -377,8 +378,8 @@ def verify(report: str, sources: list[str]) -> Verdict:
 def sources_from_steps(steps: list[dict]) -> list[str]:
     """Everything the run was told, as flat text: tool results and the opening context.
 
-    A compacted session is checked against what survives on the current path, which is
-    what the agent could still see when it wrote the report.
+    Prefer `sources_from_nodes` where nodes are available — a step cannot say whether it
+    is a compaction boundary, and a boundary is not evidence. See that function.
     """
     out: list[str] = []
     for step in steps:
@@ -388,6 +389,23 @@ def sources_from_steps(steps: list[dict]) -> list[str]:
         elif kind == "user_input":
             out += [b.get("text", "") for b in (step.get("content") or [])]
     return [text for text in out if text]
+
+
+def sources_from_nodes(nodes: list[Any]) -> list[str]:
+    """The same, minus anything the model wrote itself.
+
+    A compaction boundary is a `user_input` node, so the flat view counts it as a source —
+    and its brief is written by a model from a truncated history. A figure invented there
+    then *validates itself* in the final report: the checker reports "all figures agree"
+    for a number that appears in no tool output anywhere. That is the exact laundering
+    this module exists to prevent, running in reverse.
+
+    Evidence is what a tool returned and what a human asked for. Nothing the model wrote
+    counts, however plausible it looks by the time it comes back around.
+    """
+    return sources_from_steps(
+        [node.step for node in nodes if not node.meta.get("compact_boundary")]
+    )
 
 
 # ---- writing the numbers down for the next turn -------------------------------

@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Literal, get_type_hints
 
 from .config import AGENT_DIR, RUNS_DIR
+from .permissions import PlanState
 
 #: Memory files the agent may append to. Everything else under agent/memory/ is curated
 #: by a human and read-only: brief-samples.md is ground truth from scripts that actually
@@ -57,6 +58,9 @@ class ToolContext:
     agent_dir: Path = AGENT_DIR
     runs_dir: Path = RUNS_DIR
     turn: int = 0
+    #: Shared with the permission gate, which enforces plan mode while this tool ends it.
+    #: None means plan mode is unavailable in this run.
+    plan: PlanState | None = None
 
     @property
     def memory_dir(self) -> Path:
@@ -115,6 +119,14 @@ class Tool:
     parameters: dict
     fn: Callable[..., str]
     concurrency_safe: bool
+    #: Does calling this change anything? Distinct from `concurrency_safe`, which asks
+    #: whether it is safe to run alongside others — one is a scheduling question and the
+    #: other is a safety boundary, and plan mode is built on this one.
+    #:
+    #: Defaulted, unlike `concurrency_safe`, because the default is the *safe* direction:
+    #: False means "treat it as a write", so a tool nobody thought about is refused in
+    #: plan mode rather than quietly permitted.
+    read_only: bool = False
     interrupt_behavior: InterruptBehavior = "cancel"
     wants_context: bool = False
 
@@ -137,12 +149,15 @@ class Tool:
 def tool(
     *,
     concurrency_safe: bool,
+    read_only: bool,
     interrupt_behavior: InterruptBehavior = "cancel",
 ) -> Callable[[Callable], Tool]:
     """Turn a function into a Tool. The docstring becomes the model-facing description.
 
-    `concurrency_safe` is required rather than defaulted — deciding it is the point, and a
-    default would be silently wrong half the time.
+    `concurrency_safe` and `read_only` are both required rather than defaulted — deciding
+    them is the point, and a default would be silently wrong half the time. `Tool` itself
+    defaults `read_only` to False so that a tool built by other means fails closed, but an
+    author writing one here is made to answer.
     """
 
     def wrap(fn: Callable) -> Tool:
@@ -152,6 +167,7 @@ def tool(
             parameters=_schema_from_signature(fn),
             fn=fn,
             concurrency_safe=concurrency_safe,
+            read_only=read_only,
             interrupt_behavior=interrupt_behavior,
             wants_context=_wants_context(fn),
         )
@@ -206,7 +222,7 @@ def _resolve_memory(memory_dir: Path, name: str) -> Path:
     return candidate
 
 
-@tool(concurrency_safe=True)
+@tool(concurrency_safe=True, read_only=True)
 def list_memory(ctx: ToolContext) -> str:
     """List the memory topic files available to read.
 
@@ -218,7 +234,7 @@ def list_memory(ctx: ToolContext) -> str:
     return "\n".join(names) if names else "memory directory is empty"
 
 
-@tool(concurrency_safe=True)
+@tool(concurrency_safe=True, read_only=True)
 def read_memory(ctx: ToolContext, name: str) -> str:
     """Read one memory topic file in full.
 
@@ -232,7 +248,36 @@ def read_memory(ctx: ToolContext, name: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
-@tool(concurrency_safe=False, interrupt_behavior="block")
+# `concurrency_safe=False` is load-bearing rather than cautious: the executor treats an
+# unsafe tool as a barrier, so everything in flight drains, this runs alone, and calls
+# queued behind it resume *after* the mode has flipped. Without the barrier a sibling call
+# could race its own permission check against the approval that would have allowed it.
+@tool(concurrency_safe=False, read_only=False, interrupt_behavior="block")
+def submit_plan(ctx: ToolContext, plan: str) -> str:
+    """Propose your plan for approval. Call this in plan mode once the plan is ready.
+
+    A person reads it and decides. Approved, plan mode lifts and you continue in the same
+    session with everything you have already learned — so do not re-research. Refused, you
+    are told why and may revise once.
+
+    Args:
+        plan: The plan itself. What you will do and why, not an account of your research.
+    """
+    if ctx.plan is None:
+        return "plan mode is not available in this run; there is nothing to approve"
+    if not ctx.plan.active:
+        return "not in plan mode — nothing to approve here; just do the work"
+
+    # Reaching the body at all means the gate approved it: a refusal never calls us, and
+    # the plan text was recorded on the call step before the gate ever ran.
+    ctx.plan.active = False
+    return (
+        "Plan approved. Plan mode has lifted and the tools you were refused are available "
+        "again. Carry the plan out; do not restate it first."
+    )
+
+
+@tool(concurrency_safe=False, read_only=False, interrupt_behavior="block")
 def append_run_log(ctx: ToolContext, text: str) -> str:
     """Append a line to this run's log. Use it to record a decision worth keeping.
 
@@ -246,7 +291,7 @@ def append_run_log(ctx: ToolContext, text: str) -> str:
     return f"appended {len(text)} chars to {log.name}"
 
 
-@tool(concurrency_safe=False, interrupt_behavior="block")
+@tool(concurrency_safe=False, read_only=False, interrupt_behavior="block")
 def append_memory(ctx: ToolContext, name: str, section: str, entry: str) -> str:
     """Append one entry to a section of a writable memory file, so a finding survives.
 
@@ -300,4 +345,6 @@ def append_memory(ctx: ToolContext, name: str, section: str, entry: str) -> str:
 
 
 def default_registry() -> ToolRegistry:
-    return ToolRegistry([list_memory, read_memory, append_memory, append_run_log])
+    return ToolRegistry(
+        [list_memory, read_memory, append_memory, append_run_log, submit_plan]
+    )

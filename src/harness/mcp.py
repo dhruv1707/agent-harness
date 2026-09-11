@@ -395,6 +395,11 @@ class MCPBridge:
             parameters=sanitize_schema(_field(mcp_tool, "input_schema", "inputSchema")),
             fn=call,
             concurrency_safe=_is_read_only(mcp_tool),
+            # The same hint, now answering a second and more consequential question.
+            # Scheduling was the forgiving use: getting it wrong cost parallelism. This
+            # one gates plan mode, so `_is_read_only` treating an unannotated tool as a
+            # write is what makes plan mode fail closed.
+            read_only=_is_read_only(mcp_tool),
             interrupt_behavior="cancel",
             wants_context=False,
         )

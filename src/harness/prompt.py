@@ -31,6 +31,7 @@ from .config import (
 DEFAULT_LAYER_FILES: list[tuple[str, str]] = [
     ("identity", "prompts/00-identity.md"),
     ("system-rules", "prompts/10-system-rules.md"),
+    ("plan-mode", "prompts/20-plan-mode.md"),
     ("working-rules", "prompts/30-working-rules.md"),
 ]
 
@@ -61,6 +62,12 @@ class RunContext:
     #: A run that overran did so issuing one tool call per turn when several were
     #: independent — invisible cost it had no reason to avoid.
     max_turns: int | None = None
+    #: Whether the run *started* in plan mode. Deliberately not "is in plan mode": this
+    #: text is frozen into the opening user step and read on every later turn, so a live
+    #: flag would still claim plan mode long after it lifted. How the run began stays
+    #: true; whether it still holds is the submit_plan result's job to say, which is
+    #: turn-stamped and in the right place in the conversation.
+    plan_mode: bool = False
 
     def render(self) -> str:
         lines = [
@@ -72,6 +79,11 @@ class RunContext:
             f"- Run id: {self.run_id}",
             f"- Window: {self.window}",
         ]
+        if self.plan_mode:
+            lines.append(
+                "- This run started in plan mode: until a plan is approved, only "
+                "read-only tools will run. Call `submit_plan` when the plan is ready."
+            )
         if self.max_turns:
             lines.append(
                 f"- Turn budget: {self.max_turns} model turns, then the run is cut off "

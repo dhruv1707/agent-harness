@@ -12,6 +12,7 @@ until then the loop fails loudly rather than guessing.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -20,6 +21,7 @@ from .compaction import is_prompt_too_long, plan_cut, summarize
 from .config import (
     MAX_CONSECUTIVE_COMPACT_FAILURES,
     MIN_STEPS_TO_COMPACT,
+    MAX_PLAN_ATTEMPTS,
     MAX_TURNS,
     MODEL,
     compact_threshold,
@@ -38,6 +40,7 @@ from .executor import StreamingToolExecutor
 from .permissions import PermissionGate
 from .prompt import AssembledPrompt
 from .session_memory import MemoryGate, SessionMemory, Writer
+from .attachments import from_lineage, render_boundary
 from .tools import ToolContext, ToolRegistry
 from .transcript import Transcript
 
@@ -158,6 +161,7 @@ async def query_loop(
     writer: Writer | None = None,
     budget: int | None = None,
     on_text: Callable[[str], None] | None = None,
+    memory_dir: Path | None = None,
     on_event: Callable[[Any], None] | None = None,
 ) -> LoopResult:
     """Run until the model stops asking for tools, or a termination condition fires.
@@ -260,7 +264,9 @@ async def query_loop(
             # The request outgrew the window. Compaction is the recovery, not a retry
             # loop: one attempt, then the turn fails honestly.
             if is_prompt_too_long(exc) and not ptl_recovered:
-                if await maybe_compact(state, client, model, budget, forced=True):
+                if await maybe_compact(
+                    state, client, model, budget, forced=True, memory_dir=memory_dir
+                ):
                     ptl_recovered = True
                     state.turn -= 1  # the turn never ran; do not spend it
                     continue
@@ -294,13 +300,25 @@ async def query_loop(
         for outcome in outcomes:
             state.record(outcome.to_step(), turn=state.turn)
 
+        # Plan mode has two endings of its own, both deliberate and both enumerated here
+        # with the rest. Neither is a failure of the loop: one is a plan waiting for a
+        # person, the other a plan a person has now refused twice.
+        plan = getattr(gate, "plan", None)
+        if plan is not None:
+            if plan.pending:
+                state.stop_reason = "plan_pending"
+                return LoopResult("plan_pending", state.turn, last_text, state.usage)
+            if plan.attempts >= MAX_PLAN_ATTEMPTS:
+                state.stop_reason = "plan_refused"
+                return LoopResult("plan_refused", state.turn, last_text, state.usage)
+
         state.context_tokens = state.usage.get("total_input_tokens", state.context_tokens)
         state.memory_gate.observe_tool_calls(
             len(outcomes), sum(1 for o in outcomes if o.is_error)
         )
         # Mid-tool-chain is not a coherent moment to write notes, so the gate may defer.
         await maybe_write_memory(state, client, model, writer, at_stopping_point=False)
-        await maybe_compact(state, client, model, budget)
+        await maybe_compact(state, client, model, budget, memory_dir=memory_dir)
 
 
 async def maybe_write_memory(
@@ -333,6 +351,7 @@ async def maybe_compact(
     budget: int | None = None,
     *,
     forced: bool = False,
+    memory_dir: Path | None = None,
 ) -> bool:
     """Summarize the old history and rebuild the working context from it.
 
@@ -366,10 +385,18 @@ async def maybe_compact(
     state.compact_failures = 0
     state.session_memory = brief
     brief.save(state.transcript.session_id)
+    # Attachments are derived from the tree rather than held on the side, so this reads
+    # the lineage that is about to be replaced — including whatever earlier boundaries
+    # already replaced — and re-attaches it alongside the brief.
+    lineage = state.transcript.lineage()
     state.transcript.compact_boundary(
-        brief.render(),
+        render_boundary(lineage, brief.render(), memory_dir=memory_dir),
         nodes[cut:],
-        meta={"pre_compact_tokens": state.context_tokens, "steps_compacted": cut},
+        meta={
+            "pre_compact_tokens": state.context_tokens,
+            "steps_compacted": cut,
+            "attachments": [i.name for i in from_lineage(lineage).items],
+        },
     )
     state.project()  # the tree's shape changed under us
     state.compactions += 1

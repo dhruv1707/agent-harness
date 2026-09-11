@@ -13,7 +13,7 @@ from .config import CONTEXT_BUDGET_TOKENS, MAX_TURNS, MODEL, cache_floor
 from .events import ToolCallReady, ToolCallStarted
 from .prompt import AssembledPrompt, RunContext, build_effective_system_prompt
 from .mcp import MCPBridge, load_servers
-from .verify import sources_from_steps, verify
+from .verify import sources_from_nodes, verify
 from .session import AgentSession
 from .session_memory import SessionMemory
 from .tools import default_registry
@@ -196,6 +196,7 @@ def _cmd_run(args) -> int:
         "max_turns": args.max_turns,
         "policy_path": args.permissions,
         "auto_approve": args.yes,
+        "plan": args.plan,
         "budget": args.budget,
     }
     try:
@@ -267,13 +268,22 @@ def _cmd_run(args) -> int:
     # Governance, not advice: the transcript holds every byte every tool returned, so
     # the figures in the report are checked against it rather than trusted.
     if result.text:
-        verdict = verify(result.text, sources_from_steps(session.transcript.all_steps()))
+        verdict = verify(result.text, sources_from_nodes(session.transcript.all_nodes()))
         print(verdict.render(), file=sys.stderr)
 
     print(
         f"[transcript] harness transcript {session.session_id}",
         file=sys.stderr,
     )
+    # A planning run with nobody to approve did exactly what it was asked to do. The plan
+    # is in the transcript; failing the run would be reporting success as an error.
+    if result.stop_reason == "plan_pending":
+        print(
+            "[plan] proposed, and nobody was available to approve it. Review it above, "
+            f"then: harness run --resume {session.session_id} \"go ahead\"",
+            file=sys.stderr,
+        )
+        return 0
     if result.stop_reason != "end_turn":
         return 1
     # A report whose numbers contradict the tools is a failed run, not a caveat.
@@ -404,6 +414,11 @@ def main() -> int:
         type=Path,
         default=None,
         help="Policy file. Default: agent/permissions.toml",
+    )
+    run.add_argument(
+        "--plan",
+        action="store_true",
+        help="Start in plan mode: read anything, change nothing, until a plan is approved.",
     )
     run.add_argument(
         "--yes",
