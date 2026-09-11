@@ -45,6 +45,11 @@ _LABELLED = re.compile(
 #: An identifier long enough that a collision with a quantity is not a concern.
 _ID = re.compile(r"\b\d{8,}\b")
 
+def _blank_dates(text: str) -> str:
+    """Blank out ISO dates without changing any character offset."""
+    return _ISO_DATE.sub(lambda m: " " * len(m.group(0)), text)
+
+
 #: Below this, a figure is structure rather than measurement — list numbering, "top 5".
 MIN_INTERESTING = Decimal("10")
 
@@ -122,7 +127,7 @@ def _walk(node: object, index: Index) -> None:
 def index_sources(sources: list[str]) -> Index:
     index = Index()
     for source in sources:
-        for match in _NUMBER.finditer(_ISO_DATE.sub(" ", source)):
+        for match in _NUMBER.finditer(_blank_dates(source)):
             value = _dec(match.group(1), match.group(2))
             if value is not None:
                 index.numbers.add(value)
@@ -152,6 +157,12 @@ class Figure:
     entity: str | None = None
     metric: str | None = None
     actual: Decimal | None = None
+    #: Where the figure sits, so a correction replaces that figure and nothing else. A
+    #: naive str.replace once rewrote digits inside an ad id that happened to contain the
+    #: same two characters as a wrong purchase count.
+    line_no: int = -1
+    start: int = -1
+    end: int = -1
 
     def __str__(self) -> str:
         where = f"{self.entity} " if self.entity else ""
@@ -160,30 +171,59 @@ class Figure:
         return f"{self.raw} — {self.line.strip()[:80]}"
 
 
+def _resolve(label: str, metrics: dict[str, Decimal]) -> str | None:
+    """Map a label as written to a metric key.
+
+    Reports shorten names — `Thumbstop:` for `thumbstop_ratio`, `CPA:` for
+    `cost_per_purchase`. An unambiguous prefix is accepted; an ambiguous one is not, since
+    guessing which metric a figure was filed under is how a correction becomes a new error.
+    """
+    name = label.strip().strip("*`_").lower().replace(" ", "_")
+    if name in metrics:
+        return name
+    candidates = [key for key in metrics if key.startswith(name)]
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def _figures(report: str, index: Index) -> tuple[list[Figure], list[Figure]]:
     """Split the report's numbers into labelled metrics and everything else."""
     labelled: list[Figure] = []
     loose: list[Figure] = []
     entity: str | None = None
 
-    for line in report.splitlines():
+    for line_no, line in enumerate(report.splitlines()):
         for found in _ID.findall(line):
             if found in index.metrics:
                 entity = found  # a heading names the ad the next lines describe
-        cleaned = _ISO_DATE.sub(" ", line)
+        cleaned = _blank_dates(line)
 
-        claimed_spans = []
+        claimed_spans: set[tuple[int, int]] = set()
         for match in _LABELLED.finditer(cleaned):
             value = _dec(match.group(2), match.group(3))
             if value is None:
                 continue
-            name = match.group(1).strip().lower().replace(" ", "_")
-            if entity and name in index.metrics.get(entity, {}):
-                labelled.append(
-                    Figure(value, match.group(0).split(":")[-1].strip(), line, entity, name,
-                           index.metrics[entity][name])
+            name = _resolve(match.group(1), index.metrics.get(entity, {}) if entity else {})
+            if name is None:
+                continue
+            # The figure alone, not the `name: value` pair: a correction rewrites the
+            # number and leaves the label it was filed under intact.
+            start, end = match.start(2), match.end()
+            if line[start - 1 : start] == "$":
+                start -= 1  # the currency mark belongs to the figure, not the label
+            labelled.append(
+                Figure(
+                    value=value,
+                    raw=line[start:end],
+                    line=line,
+                    entity=entity,
+                    metric=name,
+                    actual=index.metrics[entity][name],
+                    line_no=line_no,
+                    start=start,
+                    end=end,
                 )
-                claimed_spans.append(match.span(2))
+            )
+            claimed_spans.add(match.span(2))
 
         for match in _NUMBER.finditer(cleaned):
             value = _dec(match.group(1), match.group(2))
@@ -191,7 +231,10 @@ def _figures(report: str, index: Index) -> tuple[list[Figure], list[Figure]]:
                 continue
             if match.span(1) in claimed_spans:
                 continue
-            loose.append(Figure(value, match.group(0), line))
+            loose.append(
+                Figure(value, match.group(0), line, line_no=line_no,
+                       start=match.start(), end=match.end())
+            )
     return labelled, loose
 
 
@@ -262,3 +305,134 @@ def sources_from_steps(steps: list[dict]) -> list[str]:
         elif kind == "user_input":
             out += [b.get("text", "") for b in (step.get("content") or [])]
     return [text for text in out if text]
+
+
+# ---- writing the numbers down for the next turn -------------------------------
+
+
+#: Enough entities to carry a ranking forward without crowding out the prose sections.
+MAX_MEASURED_ENTITIES = 25
+
+
+def _plain(value: Decimal) -> str:
+    """A number a reader can scan: no exponent, no float tail, no trailing zeros."""
+    rounded = value.quantize(Decimal("0.0001")) if abs(value) < 10_000 else value.quantize(Decimal("0.01"))
+    text = format(rounded.normalize(), "f")
+    return text
+
+
+def render_measurements(index: Index, mentioned: set[str], limit: int = MAX_MEASURED_ENTITIES) -> str:
+    """The metrics section of a continuation brief, written from the tool results.
+
+    Not model-written, and deliberately so. The summarizer is shown a history whose tool
+    results are truncated to a fixed byte budget, so for a fifty-row ranking it is asked
+    for "concrete metric numbers" while holding almost none of them — and it fills the gap
+    from what it already knows about the brand. Numbers are the one part of a brief that
+    can be transcribed rather than recalled, so they are.
+    """
+    chosen = [entity for entity in index.metrics if entity in mentioned][:limit]
+    if not chosen:
+        return ""
+
+    lines = [
+        "Transcribed by the harness from tool results, not recalled. These override any "
+        "figure elsewhere in this brief.",
+        "",
+    ]
+    for entity in chosen:
+        metrics = index.metrics[entity]
+        rendered = ", ".join(f"{name}={_plain(value)}" for name, value in metrics.items())
+        lines.append(f"- `{entity}` — {rendered}")
+    return "\n".join(lines)
+
+
+def ids_mentioned(text: str) -> set[str]:
+    return set(_ID.findall(text))
+
+
+def repair(text: str, sources: list[str]) -> tuple[str, list[Figure]]:
+    """Rewrite figures that contradict the tool results, in place.
+
+    Correcting beats dropping: the finding is worth keeping and the true value is known,
+    so there is nothing to decide. Only figures explicitly labelled with a metric name for
+    an identified entity are touched — everything else is left exactly as written.
+    """
+    verdict = verify(text, sources)
+    if not verdict.contradicted:
+        return text, []
+
+    lines = text.splitlines()
+    fixed: list[Figure] = []
+    by_line: dict[int, list[Figure]] = {}
+    for figure in verdict.contradicted:
+        if figure.actual is not None and figure.line_no >= 0:
+            by_line.setdefault(figure.line_no, []).append(figure)
+
+    for line_no, figures in by_line.items():
+        line = lines[line_no]
+        # Right to left, so each splice leaves the offsets to its left still valid.
+        for figure in sorted(figures, key=lambda f: f.start, reverse=True):
+            written = line[figure.start : figure.end]
+            # Rewrite in the form it was written in: a ratio reported as a percentage is
+            # corrected as a percentage, not silently rescaled.
+            actual = figure.actual * 100 if written.endswith("%") else figure.actual
+            correct = _plain(actual)
+            if written.startswith("$"):
+                correct = "$" + correct
+            if written.endswith("%"):
+                correct += "%"
+            lines[line_no] = line = line[: figure.start] + correct + line[figure.end :]
+            fixed.append(figure)
+
+    repaired = "\n".join(lines)
+    if text.endswith("\n"):
+        repaired += "\n"  # a repair must not change the shape of the text it edits
+    return repaired, fixed
+
+
+# ---- quoted text --------------------------------------------------------------
+
+#: Short enough to be a label, long enough that a coincidental match is not a worry.
+MIN_QUOTE_CHARS = 25
+#: Compared on a prefix, so a summarizer that shortens a long hook still matches.
+QUOTE_PREFIX_CHARS = 40
+
+_QUOTE = re.compile(r'["“]([^"“”\n]{%d,})["”]' % MIN_QUOTE_CHARS)
+_PUNCT = str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"',
+                        "–": "-", "—": "-", "…": "..."})
+
+
+def _normalize(text: str) -> str:
+    return " ".join(text.translate(_PUNCT).lower().split())
+
+
+def unverified_quotes(text: str, sources: list[str]) -> list[str]:
+    """Quoted strings that appear verbatim in no tool result.
+
+    The figures in a brief can be corrected because the true value is known. Quoted text
+    cannot — so it is marked instead. This matters more than it sounds: on a hooks-only
+    task the quotes *are* the deliverable, and a summarizer working from truncated tool
+    results invented eight of nine, complete with a product the account does not sell.
+    """
+    blob = _normalize(" ".join(sources))
+    missing: list[str] = []
+    for quote in _QUOTE.findall(text):
+        probe = _normalize(quote)[:QUOTE_PREFIX_CHARS]
+        if probe and probe not in blob:
+            missing.append(quote)
+    return missing
+
+
+UNVERIFIED_MARK = " [unverified: not found in any tool result]"
+
+
+def mark_unverified_quotes(text: str, sources: list[str]) -> tuple[str, list[str]]:
+    """Annotate quotes the record does not support, leaving the text itself intact."""
+    missing = unverified_quotes(text, sources)
+    for quote in missing:
+        for closing in ('"', "”"):
+            needle = quote + closing
+            if needle in text:
+                text = text.replace(needle, needle + UNVERIFIED_MARK, 1)
+                break
+    return text, missing

@@ -19,6 +19,14 @@ import json
 from typing import Any
 
 from .config import KEEP_RECENT_SHARE
+from .verify import (
+    ids_mentioned,
+    index_sources,
+    mark_unverified_quotes,
+    render_measurements,
+    repair,
+    sources_from_steps,
+)
 from .session_memory import SessionMemory, WRITE_PROMPT, render_previous
 
 #: Tool results and outputs longer than this are labelled rather than sent for
@@ -190,7 +198,21 @@ async def summarize(
         # The compact request itself overflowed. Drop the oldest half and try once more.
         text = await attempt(cleaned[len(cleaned) // 2 :])
 
-    return SessionMemory.parse(text).enforce_budgets()
+    brief = SessionMemory.parse(text)
+
+    # The summarizer read a history whose large tool results were truncated, so its prose
+    # can carry figures it never saw. Everything below is transcription from the untouched
+    # steps: contradictions in the prose are corrected against the record, and the metrics
+    # section is written from the record outright.
+    sources = sources_from_steps(steps)
+    for name, body in list(brief.sections.items()):
+        if body:
+            body, _ = repair(body, sources)
+            brief.sections[name], _ = mark_unverified_quotes(body, sources)
+    brief.sections["Measurements"] = render_measurements(
+        index_sources(sources), ids_mentioned(brief.render())
+    )
+    return brief.enforce_budgets()
 
 
 def _extract_text(response: Any) -> str:

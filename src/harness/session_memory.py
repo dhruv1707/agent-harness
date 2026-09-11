@@ -31,6 +31,7 @@ from .config import (
 SECTIONS: tuple[str, ...] = (
     "Task",
     "Findings",
+    "Measurements",
     "Examined",
     "Failed approaches",
     "Current state",
@@ -44,6 +45,10 @@ SECTIONS: tuple[str, ...] = (
 SECTION_BUDGETS: dict[str, int] = {
     "Task": 1_000,
     "Findings": 3_000,
+    #: Written by the harness from tool results rather than by the model, so this is a
+    #: transcription budget, not a summarization one — it bounds how many entities carry
+    #: forward. See `verify.render_measurements`.
+    "Measurements": 2_000,
     "Examined": 1_500,
     "Failed approaches": 1_500,
     "Current state": 1_500,
@@ -219,6 +224,10 @@ Rules:
 - Failed approaches covers anything tried that did not work, including things that ran
   without error. It is what stops the next turn repeating them.
 - Next is one concrete action. Not a plan, not a list of options.
+- Leave `Measurements` empty. The harness fills it in from the tool results directly,
+  because the history you are reading has large tool results truncated — you do not have
+  the figures in front of you and must not reconstruct them. Cite ad ids freely in
+  Findings; the numbers will be attached for you.
 - Do not talk about note-taking itself.
 - Do not add, rename, reorder or drop fields.
 - Be dense. Prefer concrete values — ad ids, metric numbers, verbatim hooks — over
@@ -228,6 +237,7 @@ Template:
 
 ## Task
 ## Findings
+## Measurements
 ## Examined
 ## Failed approaches
 ## Current state

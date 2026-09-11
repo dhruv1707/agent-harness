@@ -7,7 +7,17 @@ reported at `$29.02`. Right about which ads won, wrong about every number beside
 
 import json
 
-from harness.verify import sources_from_steps, verify
+from harness.verify import (
+    UNVERIFIED_MARK,
+    ids_mentioned,
+    index_sources,
+    mark_unverified_quotes,
+    render_measurements,
+    repair,
+    sources_from_steps,
+    unverified_quotes,
+    verify,
+)
 
 # Shaped like a bridged Atria response: an HTTP envelope whose body is a JSON string.
 ADS = json.dumps(
@@ -132,3 +142,144 @@ def test_a_compacted_session_is_checked_against_what_it_was_ever_told():
         assert verify(report, sources_from_steps(transcript.all_steps())).ok
     finally:
         transcript.path.unlink(missing_ok=True)
+
+
+# ---- correcting a brief before it becomes the session's memory -----------------
+
+
+def test_a_correction_rewrites_the_figure_and_nothing_else():
+    """The first repair replaced digits by substring search and silently rewrote an ad
+    id that happened to contain the same two characters as a wrong purchase count."""
+    brief = "- Ad `6897420294631` (Spend: $1,470.92, Purchases: 3)\n"
+    fixed, changed = repair(brief, [ADS])
+
+    assert "`6897420294631`" in fixed, "the identifier must survive intact"
+    assert "$29.02" in fixed and "$1,470.92" not in fixed
+    assert "Purchases: 2" in fixed
+    assert {f.metric for f in changed} == {"spend", "purchases"}
+
+
+def test_a_ratio_written_as_a_percentage_is_corrected_as_one():
+    brief = "- Ad `6897420294631` (Thumbstop: 29.4%)\n"
+    fixed, _ = repair(brief, [ADS])
+
+    assert "32.4786%" in fixed, "corrected in the form it was written in, not rescaled"
+
+
+def test_an_abbreviated_metric_label_still_resolves():
+    """Reports write `Thumbstop:` for `thumbstop_ratio`; an unambiguous prefix counts."""
+    assert repair("- Ad `6897420294631` (Thumbstop: 29.4%)\n", [ADS])[1]
+
+
+def test_an_ambiguous_label_is_left_alone():
+    """`cost` prefixes two metrics here, and guessing which is how a fix becomes a bug."""
+    sources = [
+        json.dumps(
+            {
+                "body": json.dumps(
+                    {
+                        "data": {
+                            "platform_ad_id": "6897420294631",
+                            "metrics": {"cost_per_purchase": 14.51, "cost_per_lead": 3.2},
+                        }
+                    }
+                )
+            }
+        )
+    ]
+    assert repair("- Ad `6897420294631` (Cost: $99.00)\n", sources)[1] == []
+
+
+def test_nothing_is_rewritten_when_the_figures_are_right():
+    brief = "- Ad `6897420294631` (Spend: $29.02, Purchases: 2)\n"
+    assert repair(brief, [ADS]) == (brief, []), "unchanged text, shape included"
+
+
+def test_measurements_are_transcribed_for_the_ads_the_brief_names():
+    index = index_sources([ADS])
+    table = render_measurements(index, ids_mentioned("we looked at `6897420294631` closely"))
+
+    assert "`6897420294631`" in table and "spend=29.02" in table
+    assert "52539049653635" not in table, "only what the brief actually refers to"
+
+
+def test_measurements_are_empty_when_the_brief_names_no_entity():
+    assert render_measurements(index_sources([ADS]), set()) == ""
+
+
+def test_an_invented_quote_is_marked_and_a_real_one_is_not():
+    real = "I thought the only way to fix my 2 a.m. hot flashes was hormone therapy."
+    sources = [ADS, json.dumps({"body": json.dumps({"data": {"transcript": real}})})]
+    brief = f'Hook: "{real}"\nHook: "The #1 Pet Bed for Humans. As seen on Shark Tank."\n'
+
+    marked, missing = mark_unverified_quotes(brief, sources)
+
+    assert missing == ["The #1 Pet Bed for Humans. As seen on Shark Tank."]
+    assert marked.count(UNVERIFIED_MARK) == 1
+    assert f'"{real}"' + UNVERIFIED_MARK not in marked
+
+
+def test_a_shortened_quote_still_matches_its_source():
+    """Summarizers truncate; a prefix match keeps that from reading as fabrication."""
+    real = "Okay, let's do the math. $189 divided by 365 nights equals $0.52 per night."
+    sources = [json.dumps({"body": json.dumps({"data": {"transcript": real}})})]
+
+    assert unverified_quotes('Hook: "Okay, let\'s do the math. $189 divided by 365"', sources) == []
+
+
+# ---- the whole compaction path ------------------------------------------------
+
+
+def test_summarize_corrects_the_brief_it_gets_back():
+    """End to end: the summarizer reads a history whose tool results were truncated, so
+    whatever it writes is checked and corrected against the untouched steps before it
+    becomes the session's memory."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from harness.compaction import summarize
+
+    fabricated = (
+        "## Task\nReview ads.\n"
+        "## Findings\n- Ad `6897420294631` (Spend: $1,470.92, Purchases: 3, "
+        'Thumbstop: 29.4%): Hook: "The #1 Pet Bed for Humans. As seen on Shark Tank."\n'
+        "## Measurements\n- Ad `6897420294631` — spend=$9,999.00\n"
+        "## Examined\nlist_ad_account_ads\n"
+        "## Failed approaches\nNone.\n"
+        "## Current state\nRanked.\n"
+        "## Next\nWrite the report.\n"
+    )
+
+    class FakeClient:
+        def __init__(self):
+            step = SimpleNamespace(
+                type="model_output", content=[SimpleNamespace(text=fabricated, parts=None)]
+            )
+            response = SimpleNamespace(steps=[step], output_text="")
+            self.aio = SimpleNamespace(
+                interactions=SimpleNamespace(create=self._create(response))
+            )
+
+        @staticmethod
+        def _create(response):
+            async def create(**_kwargs):
+                return response
+            return create
+
+    steps = [
+        {"type": "user_input", "content": [{"type": "text", "text": "top ads"}]},
+        {"type": "function_call", "name": "list_ad_account_ads", "arguments": {}},
+        {"type": "function_result", "name": "list_ad_account_ads",
+         "result": [{"type": "text", "text": ADS}]},
+    ]
+    brief = asyncio.run(summarize(FakeClient(), "fake-model", steps))
+
+    findings = brief.sections["Findings"]
+    assert "$29.02" in findings and "$1,470.92" not in findings
+    assert "Purchases: 2" in findings
+    assert "`6897420294631`" in findings, "the identifier survives the correction"
+    assert UNVERIFIED_MARK in findings, "the invented hook is marked"
+
+    measurements = brief.sections["Measurements"]
+    assert "9,999" not in measurements, "the model's version is discarded, not merged"
+    assert "spend=29.02" in measurements and "roas=8.2102" in measurements
