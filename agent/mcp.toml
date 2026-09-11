@@ -52,8 +52,13 @@ tools = [
   "get_ad_account_creative_tags",
 
   # --- 4. Competitor library ---------------------------------------------------
+  # resolve_advertiser turns a brand name, domain or page link into an advertiser_id,
+  # which is how a request that starts from a name ("the brand called X") reaches
+  # scope=advertiser. Free-text query would half-work and also match anyone whose copy
+  # happens to mention the name.
   # get_library_ad returns media files, not what is said in them; for video ads the
   # hook lives in the transcript, which is free and safe across a whole page.
+  "resolve_advertiser",
   "search_library_ads",
   "get_library_ad",
   "get_library_ad_transcript",

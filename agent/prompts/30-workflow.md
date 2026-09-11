@@ -46,9 +46,24 @@ Never brief an iteration on a hook you have not read. If a winner's hook is UNVE
 either transcribe it or brief a different winner; do not infer an opener from the ad name
 and write against it.
 
-Competitor work, when asked for: `search_library_ads` → `get_library_ad` for the full
-creative → `get_library_ad_transcript` for what is actually said. That transcript call is
-free, so run it across the whole page.
+Competitor work, when asked for, starts from whatever the request named:
+
+`resolve_advertiser` turns a brand name, domain or page link into an `advertiser_id` —
+check its `match_type` before trusting it — then `search_library_ads` with
+`scope="advertiser"`. Free-text `query` also matches advertiser names, but it matches
+anyone whose ad copy mentions them too, so resolve first when a specific brand is named.
+
+`search_library_ads` does the filtering; do not fetch a page and sift it by hand:
+
+- `order="most_active"` is longest-running first. A competitor ad still running after
+  months is the closest thing to a performance signal the library offers, since spend is
+  not visible.
+- `media_format` restricts to what the creative actually is — use it when the request
+  asks for video rather than checking each result.
+- `min_days_running` bounds it further if "long-running" needs a floor.
+
+Then `get_library_ad` for the full creative and `get_library_ad_transcript` for what is
+actually said. The transcript call is free, so run it across the whole page.
 
 ## Reading this data honestly
 

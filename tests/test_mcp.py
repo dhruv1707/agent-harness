@@ -223,7 +223,10 @@ def test_the_shipped_config_is_atria_only():
 
 def test_the_shipped_config_loads_only_the_workflow_tools():
     atria = {s.name: s for s in load_servers()}["atria"]
-    assert len(atria.tools) == 12, atria.tools
+    # A bound rather than an exact count: an exact number churns on every deliberate
+    # addition, while a bound still catches someone quietly loading all 45 and paying
+    # ~27k prefix tokens a turn for it.
+    assert len(atria.tools) <= 20, atria.tools
     # The dependency chain that produces a hook, plus the pattern call.
     for required in (
         "list_ad_account_ads",
@@ -231,6 +234,9 @@ def test_the_shipped_config_loads_only_the_workflow_tools():
         "get_ad_account_video_transcript",
         "list_ad_account_creative_tags",
         "get_owned_brand",
+        # A request that names a brand starts here; without it the agent falls back to
+        # free-text search, which also matches anyone whose copy mentions the name.
+        "resolve_advertiser",
     ):
         assert required in atria.tools
     # Ids are fixed in CLAUDE.md, so the discovery calls are not loaded.
