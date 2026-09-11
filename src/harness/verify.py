@@ -38,7 +38,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal, InvalidOperation
 
 _NUMBER = re.compile(r"(?<![\w.\-])\$?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?(%?)")
 _ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -56,6 +56,11 @@ def _blank_dates(text: str) -> str:
     """Blank out ISO dates without changing any character offset."""
     return _ISO_DATE.sub(lambda m: " " * len(m.group(0)), text)
 
+
+#: A list item whose subject is the ad — `- \`<id>\` — name | spend: $X`, or `- Ad \`<id>\`
+#: (Spend: …)`. A short label may precede the id; a sentence may not. Anything after the
+#: id on such a line describes it, while a mention mid-prose does not.
+_ITEM_SUBJECT = re.compile(r"^\s*(?:[-*+]|\d+\.)\s+(?:[A-Za-z#]{1,12}[.:]?\s+){0,3}[`*_\[]*\d{8,}")
 
 #: A Markdown heading closes the block above it. Attribution is positional, so without
 #: this an account-level `spend:` written under "### Baseline" is read as a claim about
@@ -88,11 +93,15 @@ def _matches(source: Decimal, claimed: Decimal) -> bool:
     """
     quantum = Decimal(1).scaleb(claimed.as_tuple().exponent)
     for candidate in (source, source * 100, source / 100):
-        try:
-            if candidate.quantize(quantum) == claimed:
-                return True
-        except InvalidOperation:
-            pass
+        # Both rounding modes. `Decimal` rounds half to even, so 58.445 quantizes to
+        # 58.44, while anyone writing a dollar figure — and every report formatter — gives
+        # 58.45. Treating that as a contradiction fails an honest run.
+        for mode in (ROUND_HALF_EVEN, ROUND_HALF_UP):
+            try:
+                if candidate.quantize(quantum, rounding=mode) == claimed:
+                    return True
+            except InvalidOperation:
+                pass
         # Binary floating point does not round-trip: an agent copying 65.79 out of a
         # payload that holds 65.78999999999999 has copied it correctly. Differences this
         # small are representation, not disagreement — a fabricated figure is never
@@ -150,8 +159,12 @@ def index_sources(sources: list[str]) -> Index:
             value = _dec(match.group(1), match.group(2))
             if value is not None:
                 index.numbers.add(value)
+        # `raw_decode`, not `loads`: a tool result carries a trailing annotation — the
+        # derived-totals block this module appends — so the text is a JSON value followed
+        # by prose. `loads` rejects the whole thing and silently indexes nothing, which
+        # took the per-ad check down to the handful of ads seen only via detail calls.
         try:
-            payload = json.loads(source)
+            payload, _end = json.JSONDecoder().raw_decode(source.lstrip())
         except (ValueError, TypeError):
             continue
         # Bridged HTTP responses nest the real payload as a JSON string.
@@ -211,11 +224,19 @@ def _figures(report: str, index: Index) -> tuple[list[Figure], list[Figure]]:
     entity: str | None = None
 
     for line_no, line in enumerate(report.splitlines()):
-        if _HEADING.match(line):
-            entity = None  # before the id scan, so a heading naming an ad still sets it
-        for found in _ID.findall(line):
-            if found in index.metrics:
-                entity = found  # a heading names the ad the next lines describe
+        # Attribution has to be structural. A summary paragraph naming two ads and then
+        # quoting the account's blended roas is not making a claim about either of them,
+        # and taking "the last id on the line" filed all three figures under the second ad
+        # and failed an honest run. So only a line that names exactly one ad, as a heading
+        # or as the start of its own item, says which ad the figures belong to; a line
+        # naming several says nothing and clears the subject rather than guessing.
+        named = [found for found in _ID.findall(line) if found in index.metrics]
+        if len(named) > 1:
+            entity = None
+        elif len(named) == 1 and (_HEADING.match(line) or _ITEM_SUBJECT.match(line)):
+            entity = named[0]
+        elif _HEADING.match(line):
+            entity = None  # a heading with no ad in it closes the block above
         cleaned = _blank_dates(line)
 
         claimed_spans: set[tuple[int, int]] = set()
@@ -530,7 +551,10 @@ def derive_totals(rendered: str) -> str | None:
 
     spend = sum((m["spend"] for m in ads), Decimal(0))
     purchases = sum((m.get("purchases", Decimal(0)) for m in ads), Decimal(0))
-    if spend <= 0:
+    # Without both halves there is no CPA and no floor, and the rest is worse than
+    # nothing: a creative-tag response carries spend but no conversions, and reporting
+    # "blended roas 0" for it invites exactly the wrong conclusion.
+    if spend <= 0 or purchases <= 0:
         return None
 
     revenue = sum((m["spend"] * m.get("roas", Decimal(0)) for m in ads), Decimal(0))
@@ -540,13 +564,12 @@ def derive_totals(rendered: str) -> str | None:
         f"total purchases {_plain(purchases)}",
         f"blended roas {_plain(revenue / spend)}",
     ]
-    if purchases > 0:
-        cpa = spend / purchases
-        parts.append(f"account cpa {_plain(cpa)}")
-        parts.append(
-            f"spend floor ({SPEND_FLOOR_CPA_MULTIPLE}x cpa) "
-            f"{_plain(cpa * SPEND_FLOOR_CPA_MULTIPLE)}"
-        )
+    cpa = spend / purchases
+    parts.append(f"account cpa {_plain(cpa)}")
+    parts.append(
+        f"spend floor ({SPEND_FLOOR_CPA_MULTIPLE}x cpa) "
+        f"{_plain(cpa * SPEND_FLOOR_CPA_MULTIPLE)}"
+    )
     return (
         "\n[harness-derived from this result, not returned by the API. These cover only "
         "the ads in this response, not the whole account:\n "

@@ -382,3 +382,65 @@ def test_derived_figures_pass_verification_because_they_are_in_the_result():
     sources = [payload + derive_totals(payload)]
 
     assert verify("Spend floor was $100.00 against an account CPA of $50.00.", sources).ok
+
+
+def test_a_tool_result_carrying_a_trailing_annotation_is_still_indexed():
+    """`_render_result` appends the derived-totals block, so a result is a JSON value
+    followed by prose. Parsing it with `json.loads` indexed nothing at all and quietly
+    took the per-ad check down to the few ads seen only through detail calls."""
+    payload = ADS + "\n[harness-derived from this result: total spend 29.02]"
+
+    assert "6897420294631" in index_sources([payload]).metrics
+    report = "#### `6897420294631` — ad\n- `spend`: $1,470.92\n"
+    assert verify(report, [payload]).contradicted, "the strong check must still reach it"
+
+
+def test_a_dollar_figure_rounded_half_up_is_not_a_contradiction():
+    """Decimal rounds half to even, so 58.445 quantizes to 58.44 — while every report
+    formatter, and every person, writes $58.45."""
+    sources = [
+        json.dumps(
+            {
+                "body": json.dumps(
+                    {
+                        "data": {
+                            "platform_ad_id": "6958375710231",
+                            "metrics": {"cost_per_purchase": 58.445},
+                        }
+                    }
+                )
+            }
+        )
+    ]
+    assert verify("#### `6958375710231`\n- `cost_per_purchase`: $58.45\n", sources).ok
+
+
+def test_prose_naming_several_ads_attributes_figures_to_none_of_them():
+    """A summary paragraph naming two winners and then quoting the account's blended roas
+    is making a claim about the account, not about whichever ad was mentioned last. Taking
+    the last id on the line filed all three figures under the second ad and failed an
+    honest run with four contradictions."""
+    report = (
+        "Top roas was led by `6897420294631` (`roas`: 8.2102) and `52539049653635` "
+        "(`roas`: 4.568), both below the blended baseline of `roas`: 1.407.\n"
+    )
+    verdict = verify(report, [ADS])
+
+    assert not verdict.contradicted
+
+
+def test_a_list_item_whose_subject_is_an_ad_still_attributes():
+    """The 'where the money is' line and the compaction brief both put the ad first."""
+    for line in (
+        "- `6897420294631` — some name | `spend`: $1,470.92\n",
+        "- Ad `6897420294631` (Spend: $1,470.92)\n",
+    ):
+        assert verify(line, [ADS]).contradicted, f"should still be checked: {line!r}"
+
+
+def test_a_response_with_spend_but_no_conversions_gets_no_totals():
+    """A creative-tag response carries spend and no purchases. There is no CPA and no
+    floor in it, and printing 'blended roas 0' invites exactly the wrong conclusion."""
+    rows = [{"spend": 100.0, "purchases": 0.0} for _ in range(6)]
+
+    assert derive_totals(_ranking(rows)) is None

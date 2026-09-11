@@ -28,7 +28,10 @@ below them is not a small winner, it is an unmeasured ad.
 
 The floors and the account baseline are returned to you. Every ad-listing result carries a
 `[harness-derived …]` block with `account cpa`, `spend floor` and `blended roas`. Use those
-figures; do not work them out yourself.
+figures **verbatim**; do not work them out yourself. If you think the sample they cover is
+unrepresentative, say so in a line — do not quietly substitute arithmetic of your own. A
+derived figure you computed is in no tool result, and the harness will list it as
+unsupported.
 
 They cover the ads in *that response* only. A CPA averaged over the first fifty rows of a
 `roas` ranking is not the account's CPA — it is the CPA of the fifty cheapest-to-convert

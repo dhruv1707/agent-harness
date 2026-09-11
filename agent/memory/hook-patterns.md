@@ -12,6 +12,8 @@ the new pattern and add a row.
 | `to-whoever-said` | Thanks an anonymous stranger for advice that worked. Social proof without a testimonial | "To whoever said couples should each have their own cooling body pillow… you might have saved my relationship." |
 | `misdiagnosis-confession` | Names the wrong thing she blamed first, flatly, then walks back to the real cause | "I didn't think it was my pillow. Like, not even a little bit." |
 | `price-objection-reframe` | Concedes the high price immediately before flipping to daily cost breakdown or justification | "You're right, it is expensive. And here's why that's a good thing." |
+| `viral-discovery` | Acknowledges viral buzz / social hype before confirming personal receipt | "I finally got the pillow everyone's talking about." |
+| `founder-story` | Opens on personal founder journey, outsider disbelief, or product origin | "When I told my friends I was starting a body pillow business after a trip back to Japan, they thought it was ridiculous." |
 
 ## The house script skeleton
 
