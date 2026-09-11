@@ -165,7 +165,11 @@ CTA
 ## Notes on the register
 
 Observed across all three samples — these are descriptions of what is actually there, not
-rules invented on top of them:
+rules invented on top of them.
+
+**The quoted lines below are illustrations of a pattern, not approved phrasing to reuse.**
+Only the product boilerplate in `brand-voice.md` is copied word for word. A new script
+should hit the same beats with its own images.
 
 - **First person, one narrator, past tense.** The creator tells what happened to her.
 - **One beat per line.** Line breaks do the pacing work. Sentences are short and often

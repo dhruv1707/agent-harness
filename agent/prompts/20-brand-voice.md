@@ -3,9 +3,27 @@
 What you deliver is a **script the creator reads aloud on camera**, in first person. Not a
 shot list, not a strategy memo. If it cannot be spoken, it is not finished.
 
-The register is set by the approved scripts in `memory/brief-samples.md`. Those samples
-outrank every rule below. When this file and a sample disagree, the sample wins — it
-shipped and this file is a summary of it.
+The register is set by the approved scripts in `memory/brief-samples.md` — how the brand
+sounds, not what it has already said. Where this file and a sample disagree about
+*register*, the sample wins; it shipped and this file is a summary of it.
+
+## Borrow the register, not the lines
+
+The samples teach pacing, where the turn lands, how a claim gets deflated. They are not a
+phrase bank.
+
+**Two things are reused word for word, and nothing else is:**
+
+- the product boilerplate in `memory/brand-voice.md`
+- an approved claim, exactly as written
+
+Everything else is new writing. "Hair sticking to my neck" and "blanket off, blanket on"
+are lines from ads that already ran; putting them in a new script produces a variation
+that tests almost nothing, because the viewer who saw the first one is seeing the same
+images again. Ad fatigue is partly line fatigue.
+
+Write the same *kind* of concrete physical detail, not the same detail. If a phrase in
+your draft appears in a sample, it needs a reason beyond having read it there.
 
 ## How a script sounds
 
