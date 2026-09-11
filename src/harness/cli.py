@@ -15,6 +15,7 @@ from .prompt import AssembledPrompt, RunContext, build_effective_system_prompt
 from .mcp import MCPBridge, load_servers
 from .session import AgentSession
 from .session_memory import SessionMemory
+from .tools import default_registry
 from .transcript import Transcript
 
 RULE = "=" * 78
@@ -99,6 +100,24 @@ def _render_prompt(prompt: AssembledPrompt, counter: _Counter) -> None:
         f"   volatile: {counter.measure(prompt.volatile_text)}"
     )
 
+    # The cached prefix is system_instruction *plus* the tool declarations, and the tools
+    # are the larger half — measuring the layers alone reported MISS on a prefix nearly
+    # four times the floor.
+    local_tools = json.dumps(default_registry().declarations())
+    tool_tokens = counter.tokens(local_tools)
+    if stable_tokens is not None and tool_tokens is not None:
+        print(
+            f" TOOLS  + {tool_tokens:,} tok for {len(default_registry())} local tools"
+        )
+        stable_tokens += tool_tokens
+
+    # This command does not connect to MCP servers — that would need a live network and,
+    # for an OAuth server, a human. So the count above is the prefix a run would have with
+    # every server down. Naming the shortfall matters: MCP declarations are the larger half
+    # of a real prefix, and judging the floor without them reports MISS on a prefix that
+    # clears it four times over.
+    uncounted = [s for s in load_servers() if s.enabled]
+
     floor = cache_floor(counter.model)
     if floor is None:
         print(f" CACHE  floor unknown for {counter.model} — cannot verify")
@@ -106,6 +125,17 @@ def _render_prompt(prompt: AssembledPrompt, counter: _Counter) -> None:
         print(f" CACHE  floor is {floor:,} tok for {counter.model} — count unavailable")
     elif stable_tokens >= floor:
         print(f" CACHE  OK — prefix {stable_tokens:,} tok clears the {floor:,} tok floor")
+    elif uncounted:
+        names = ", ".join(s.name for s in uncounted)
+        print(
+            f" CACHE  UNVERIFIED — prefix without MCP tools is {stable_tokens:,} tok, "
+            f"{floor - stable_tokens:,} tok short of the {floor:,} tok floor."
+        )
+        print(
+            f"        {names} declare{'' if len(uncounted) > 1 else 's'} tools at connect, "
+            f"uncounted here. "
+            f"Run `harness run` and read total_cached_tokens for the real verdict."
+        )
     else:
         print(
             f" CACHE  MISS — prefix {stable_tokens:,} tok is BELOW the {floor:,} tok "

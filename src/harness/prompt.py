@@ -31,8 +31,7 @@ from .config import (
 DEFAULT_LAYER_FILES: list[tuple[str, str]] = [
     ("identity", "prompts/00-identity.md"),
     ("system-rules", "prompts/10-system-rules.md"),
-    ("brand-voice", "prompts/20-brand-voice.md"),
-    ("workflow", "prompts/30-workflow.md"),
+    ("working-rules", "prompts/30-working-rules.md"),
 ]
 
 GOVERNANCE_FILE = "CLAUDE.md"

@@ -5,7 +5,10 @@ loaded on every run, so keep it short — detail belongs in `memory/` topic file
 
 ## The account
 
-- **Brand:** Hugl — U-shaped cooling body pillow, DTC
+- **Brand:** **Plufl** is the company; **Hugl** is its U-shaped cooling body pillow, DTC.
+  Both names refer to this workspace's own brand. A request naming either one means the
+  **ad account** — our own ads and their performance — not the public ad library. The
+  library is for other advertisers; do not resolve our own name as if it were a competitor.
 - **Primary efficiency metric:** `roas` — the default ranking. Use `thumbstop_ratio`
   ("Thumbstop (Hook rate)") instead when the request is about hooks or attention, since
   that isolates the first three seconds from everything downstream.

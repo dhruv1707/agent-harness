@@ -235,7 +235,7 @@ def test_build_runtime_carries_tools_and_system_instruction():
     assert request["store"] is False
     assert request["stream"] is True
     assert [t["name"] for t in request["tools"]] == ["ping"]
-    assert request["system_instruction"].startswith("# Identity and Mission")
+    assert request["system_instruction"].startswith("# Identity")
 
 
 def test_thought_steps_are_replayed_in_the_next_request():
