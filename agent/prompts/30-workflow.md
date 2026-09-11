@@ -33,6 +33,12 @@ That ad won on its offer, not its opening, and its hook is not the one to iterat
 `creative.videos[].video_id` you need next. Then `get_ad_account_video_transcript` for the
 spoken words — that transcript *is* the hook, verbatim.
 
+**Record what the next run should not rediscover.** When a winning hook does not fit the
+taxonomy in `memory/hook-patterns.md`, name it *and* append it with `append_memory` —
+naming it only in your output means the next session derives it again from scratch and the
+taxonomy never settles. Same for an iteration whose result is known: append a row to
+`Tested`. Append the finding, not the narration of having found it.
+
 **3. Find the pattern.** `list_ad_account_creative_tags` groups the window's spend and
 performance across ten dimensions, one of which is visual hook. Use it to see what the
 winners share rather than reasoning ad-by-ad. Each bucket carries `top_creatives` with ids;

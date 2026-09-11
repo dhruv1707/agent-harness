@@ -25,6 +25,16 @@ from typing import Literal, get_type_hints
 
 from .config import AGENT_DIR, RUNS_DIR
 
+#: Memory files the agent may append to. Everything else under agent/memory/ is curated
+#: by a human and read-only: brief-samples.md is ground truth from scripts that actually
+#: shipped, and brand-voice.md carries compliance boundaries. An agent that can rewrite
+#: its own evidence has no evidence.
+WRITABLE_MEMORY: frozenset[str] = frozenset({"hook-patterns.md"})
+
+#: A topic file is read in full whenever it is opened, so unbounded growth is a context
+#: leak. Past this the tool refuses and says to consolidate.
+MAX_MEMORY_FILE_BYTES = 20_000
+
 InterruptBehavior = Literal["cancel", "block"]
 
 _JSON_TYPES: dict[type, str] = {
@@ -236,5 +246,58 @@ def append_run_log(ctx: ToolContext, text: str) -> str:
     return f"appended {len(text)} chars to {log.name}"
 
 
+@tool(concurrency_safe=False, interrupt_behavior="block")
+def append_memory(ctx: ToolContext, name: str, section: str, entry: str) -> str:
+    """Append one entry to a section of a writable memory file, so a finding survives.
+
+    Use this when a run learns something the next run should not have to rediscover — a
+    hook pattern the taxonomy did not have, or the result of an iteration that was tested.
+    Without it every session re-derives the same conclusions and the taxonomy never settles.
+
+    Append-only, and only to files that are meant to accumulate. It cannot create a
+    section, reword an existing line, or touch the curated files.
+
+    Args:
+        name: The memory file, e.g. "hook-patterns.md".
+        section: An existing "## " heading in that file, e.g. "Tested".
+        entry: One line to append. A table row if the section holds a table.
+    """
+    if name not in WRITABLE_MEMORY:
+        return (
+            f"{name} is read-only. Writable memory files: {', '.join(sorted(WRITABLE_MEMORY))}. "
+            "Report the finding in your output instead."
+        )
+
+    path = _resolve_memory(ctx.memory_dir, name)
+    if not path.is_file():
+        return f"no such memory file: {name}"
+
+    text = path.read_text(encoding="utf-8")
+    if len(text.encode("utf-8")) > MAX_MEMORY_FILE_BYTES:
+        return (
+            f"{name} is at its {MAX_MEMORY_FILE_BYTES:,} byte cap and is read in full every "
+            "time it is opened. Consolidate it before adding more."
+        )
+
+    lines = text.splitlines()
+    heading = f"## {section.lstrip('# ').strip()}"
+    try:
+        start = next(i for i, line in enumerate(lines) if line.strip() == heading)
+    except StopIteration:
+        existing = [ln[3:] for ln in lines if ln.startswith("## ")]
+        return f"no section '{section}' in {name}. Sections: {', '.join(existing)}"
+
+    # End of this section is the next heading, or the end of the file.
+    end = next(
+        (i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines)
+    )
+    while end > start + 1 and not lines[end - 1].strip():
+        end -= 1  # keep the blank line that separates sections
+
+    lines.insert(end, entry.rstrip())
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return f"appended to '{section}' in {name}"
+
+
 def default_registry() -> ToolRegistry:
-    return ToolRegistry([list_memory, read_memory, append_run_log])
+    return ToolRegistry([list_memory, read_memory, append_memory, append_run_log])

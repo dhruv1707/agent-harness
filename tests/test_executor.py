@@ -352,3 +352,87 @@ def test_results_follow_issue_order_not_completion_order():
     assert completed == ["fast", "slow"], "the fast call really did finish first"
     assert [o.call_id for o in outcomes] == ["c0", "c1"], "results must stay in issue order"
     assert [o.result for o in outcomes] == ["slow", "fast"]
+
+
+# ---- append_memory: the agent writing its own control plane -------------------
+
+
+def memory_ctx(tmp_path):
+    """A fake agent dir with a writable and a curated memory file."""
+    mem = tmp_path / "memory"
+    mem.mkdir(parents=True)
+    (mem / "hook-patterns.md").write_text(
+        "# Hook Patterns\n\n## Tested\n\n| Pattern | Result |\n|---|---|\n\n## Retired\n\nnone yet\n"
+    )
+    (mem / "brief-samples.md").write_text("# Brief Samples\n\n## Sample 1\n\nverbatim\n")
+    return ToolContext(session_id="s-mem", agent_dir=tmp_path)
+
+
+def test_append_lands_at_the_end_of_the_named_section(tmp_path):
+    from harness.tools import append_memory
+
+    ctx = memory_ctx(tmp_path)
+    append_memory.invoke(ctx, name="hook-patterns.md", section="Tested",
+                         entry="| radical-replacement | 1 run |")
+    text = (tmp_path / "memory" / "hook-patterns.md").read_text()
+
+    tested = text.split("## Tested")[1].split("## Retired")[0]
+    assert "| radical-replacement | 1 run |" in tested
+    assert "## Retired" in text, "the following section survives"
+    assert "none yet" in text
+
+
+def test_curated_files_are_read_only(tmp_path):
+    """brief-samples.md is ground truth from scripts that shipped. An agent that can
+    rewrite its own evidence has no evidence."""
+    from harness.tools import append_memory
+
+    ctx = memory_ctx(tmp_path)
+    out = append_memory.invoke(ctx, name="brief-samples.md", section="Sample 1", entry="invented")
+
+    assert "read-only" in out
+    assert "invented" not in (tmp_path / "memory" / "brief-samples.md").read_text()
+
+
+def test_it_cannot_invent_a_section(tmp_path):
+    from harness.tools import append_memory
+
+    ctx = memory_ctx(tmp_path)
+    out = append_memory.invoke(ctx, name="hook-patterns.md", section="Nonexistent", entry="x")
+
+    assert "no section" in out and "Tested" in out
+    assert "x\n" not in (tmp_path / "memory" / "hook-patterns.md").read_text()
+
+
+def test_it_refuses_past_the_size_cap(tmp_path):
+    """A topic file is read in full whenever opened, so unbounded growth is a context leak."""
+    from harness.tools import MAX_MEMORY_FILE_BYTES, append_memory
+
+    ctx = memory_ctx(tmp_path)
+    path = tmp_path / "memory" / "hook-patterns.md"
+    path.write_text("## Tested\n" + "x" * (MAX_MEMORY_FILE_BYTES + 1))
+
+    out = append_memory.invoke(ctx, name="hook-patterns.md", section="Tested", entry="row")
+    assert "cap" in out and "Consolidate" in out
+
+
+def test_appending_never_removes_what_is_already_there(tmp_path):
+    from harness.tools import append_memory
+
+    ctx = memory_ctx(tmp_path)
+    path = tmp_path / "memory" / "hook-patterns.md"
+    before = path.read_text()
+    for i in range(3):
+        append_memory.invoke(ctx, name="hook-patterns.md", section="Tested", entry=f"| p{i} | ok |")
+
+    after = path.read_text()
+    for line in before.splitlines():
+        assert line in after, f"lost: {line!r}"
+    assert all(f"| p{i} | ok |" in after for i in range(3))
+
+
+def test_the_write_tool_is_serial_and_blocks_on_interrupt():
+    from harness.tools import append_memory
+
+    assert append_memory.concurrency_safe is False
+    assert append_memory.interrupt_behavior == "block"

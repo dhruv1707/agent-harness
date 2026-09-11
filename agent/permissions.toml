@@ -31,6 +31,12 @@ allow = [
 ask = [
   "append_run_log",
 
+  # The agent writing into its own control plane. Append-only, one allowlisted file,
+  # size-capped, and in git — but it is still the thing it reads next run, so it asks.
+  # Move to `allow` if the unattended daily job should be able to learn without a human;
+  # with `ask` an unattended run can never record a finding.
+  "append_memory",
+
   # Atria writes. Each of these changes the workspace or spends credits, and the agent's
   # job is to write scripts, not to reorganise the account. follow_advertiser says so
   # itself: "This has real effects, not just a bookmark."
