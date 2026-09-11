@@ -13,6 +13,7 @@ from .config import CONTEXT_BUDGET_TOKENS, MAX_TURNS, MODEL, cache_floor
 from .events import ToolCallReady, ToolCallStarted
 from .prompt import AssembledPrompt, RunContext, build_effective_system_prompt
 from .mcp import MCPBridge, load_servers
+from .verify import sources_from_steps, verify
 from .session import AgentSession
 from .session_memory import SessionMemory
 from .tools import default_registry
@@ -258,15 +259,25 @@ def _cmd_run(args) -> int:
         return 1
 
     print()
+    verdict = None
     usage = f" usage={result.usage}" if result.usage else ""
     print(f"[{result.stop_reason}] turns={result.turns}{usage}", file=sys.stderr)
     if result.error:
         print(f"[error] {result.error}", file=sys.stderr)
+    # Governance, not advice: the transcript holds every byte every tool returned, so
+    # the figures in the report are checked against it rather than trusted.
+    if result.text:
+        verdict = verify(result.text, sources_from_steps(session.transcript.all_steps()))
+        print(verdict.render(), file=sys.stderr)
+
     print(
         f"[transcript] harness transcript {session.session_id}",
         file=sys.stderr,
     )
-    return 0 if result.stop_reason == "end_turn" else 1
+    if result.stop_reason != "end_turn":
+        return 1
+    # A report whose numbers contradict the tools is a failed run, not a caveat.
+    return 2 if verdict and verdict.contradicted else 0
 
 
 # ---- harness mcp -------------------------------------------------------------

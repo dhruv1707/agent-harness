@@ -114,6 +114,7 @@ class AgentSession:
             or RunContext(
                 run_id=self.session_id,
                 sources=tuple(sorted(t.name for t in self.registry)),
+                max_turns=self.max_turns,
             ),
         )
 

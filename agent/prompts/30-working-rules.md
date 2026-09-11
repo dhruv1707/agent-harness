@@ -19,6 +19,36 @@ Always ask for the other one too, so both land in the response and both can be s
 they disagree — a high-`roas` ad with a weak `thumbstop_ratio` — say so. That ad won on its
 offer, not its opening, and its hook is not the one to iterate on.
 
+## A ratio needs a denominator
+
+`roas` and `cost_per_purchase` are ratios, and sorting a ratio descending surfaces the
+smallest denominators first — an ad with one order on $6 of spend outranks every ad with
+real volume behind it. Apply the volume floor from the governance file *before* ranking.
+An ad below it is not a small winner, it is an unmeasured ad.
+
+- Say which floor you used and how many ads it removed.
+- An ad excluded by the floor but carrying unusually high spend is itself a finding. Name
+  it — that is money moving with nothing to show for it yet.
+- If fewer ads clear the floor than you were asked for, report the ones that do and say the
+  window is too thin. Do not pad the list back to length with ads you just excluded.
+- The floor governs ranking, not reading. A low-volume ad can still be worth looking at; it
+  just cannot be reported as a winner.
+
+## Every figure you write comes from a tool result
+
+Do not restate a metric from memory. By the time you write a report you may be holding a
+hundred rows of near-identical ad names, and recalled numbers come back plausible and
+wrong — right ad, invented spend. Read the figure off the tool result as you write it, and
+if you cannot see it any more, call the tool again. Re-reading is cheap; the cached
+transcript and ad detail lookups do not charge.
+
+- Report metrics from **one** ranking result, not merged across several overlapping list
+  calls. If you scanned twice at different sort orders, name which one you are quoting.
+- Round money to cents and ratios to three decimals. Copying a float verbatim —
+  `$890.6800000000001` — is not accuracy, it is noise a reader has to look past.
+- The harness checks every figure in your output against what the tools actually returned
+  and reports the ones that disagree. A contradiction fails the run.
+
 ## Reading this data honestly
 
 **Ranking and windows**

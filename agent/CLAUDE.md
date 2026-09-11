@@ -12,6 +12,9 @@ loaded on every run, so keep it short — detail belongs in `memory/` topic file
 - **Primary efficiency metric:** `roas` — the default ranking. Use `thumbstop_ratio`
   ("Thumbstop (Hook rate)") instead when the request is about hooks or attention, since
   that isolates the first three seconds from everything downstream.
+- **Minimum volume to rank as a winner:** 2 purchases in the window. This account spends
+  small amounts across many creatives, so a ratio metric ranks noise without a floor — a
+  single order on $6 of spend outranks every ad that actually ran.
 - **Default lookback window:** 7 days
 - **Data sources:** Atria only. Triple Whale was removed — its MCP access is gated on a
   plan entitlement this store does not have.

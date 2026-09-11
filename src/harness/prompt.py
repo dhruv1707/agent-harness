@@ -57,6 +57,10 @@ class RunContext:
     window: str = "last 7 days"
     metric: str | None = None
     sources: tuple[str, ...] = ()
+    #: The loop stops here whether or not the work is done, so the agent has to be told.
+    #: A run that overran did so issuing one tool call per turn when several were
+    #: independent — invisible cost it had no reason to avoid.
+    max_turns: int | None = None
 
     def render(self) -> str:
         lines = [
@@ -68,6 +72,12 @@ class RunContext:
             f"- Run id: {self.run_id}",
             f"- Window: {self.window}",
         ]
+        if self.max_turns:
+            lines.append(
+                f"- Turn budget: {self.max_turns} model turns, then the run is cut off "
+                "with whatever you have produced. Tool calls that do not depend on each "
+                "other cost one turn together; issued one at a time they cost one each."
+            )
         if self.metric:
             lines.append(f"- Primary efficiency metric: {self.metric}")
         if self.sources:

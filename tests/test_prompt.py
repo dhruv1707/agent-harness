@@ -166,3 +166,19 @@ def test_server_guidance_does_not_break_the_cache_invariant():
         run_context=RunContext(run_id="b", today="2099-12-31"), mcp_instructions=instructions
     )
     assert first.stable_text == second.stable_text
+
+
+# ---- turn budget --------------------------------------------------------------
+
+
+def test_turn_budget_reaches_the_agent_and_stays_volatile():
+    """A limit that ends the run is useless if the agent cannot see it — but it varies
+    per run, so it must not contaminate the cached prefix."""
+    prompt = build_effective_system_prompt(run_context=RunContext(max_turns=20))
+
+    assert "20 model turns" in prompt.volatile_text
+    assert "20 model turns" not in prompt.system_instruction
+
+
+def test_no_turn_budget_means_no_line():
+    assert "Turn budget" not in build_effective_system_prompt().volatile_text

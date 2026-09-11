@@ -110,6 +110,15 @@ class Transcript:
         """The linear history to send as `input`. This is the runtime context."""
         return [node.step for node in self.path_to_root(node_id)]
 
+    def all_steps(self) -> list[dict]:
+        """Every step ever recorded, in write order — across branches and compactions.
+
+        Not the runtime context: `steps()` is what the model can see now, which after a
+        compaction excludes the history the new root replaced. This is what the session
+        was ever told, which is the right question for auditing a figure in the output.
+        """
+        return [self._nodes[node_id].step for node_id in self._order]
+
     def children(self, node_id: str | None) -> list[Node]:
         return [
             self._nodes[nid] for nid in self._order if self._nodes[nid].parent_id == node_id
