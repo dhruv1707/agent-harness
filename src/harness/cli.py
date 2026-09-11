@@ -209,6 +209,7 @@ def _cmd_run(args) -> int:
             discovered = await bridge.discover()
             for entry in discovered:
                 session.registry.register(entry)
+            session.mcp_instructions = dict(bridge.instructions)
             names = ", ".join(sorted(bridge.clients)) or "none"
             print(f"[mcp] {len(discovered)} tools from {names}", file=sys.stderr)
             for failed, why in bridge.failures.items():

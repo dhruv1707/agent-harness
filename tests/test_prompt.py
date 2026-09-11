@@ -118,3 +118,51 @@ def test_entrypoint_truncates_at_the_byte_cap():
 def test_entrypoint_under_both_caps_is_untouched():
     content = "# Memory Index\n\n- [Brand voice](brand-voice.md) — tone"
     assert truncate_entrypoint_content(content) == content
+
+
+# ---- server-published guidance ------------------------------------------------
+
+
+def test_mcp_instructions_become_a_cacheable_layer():
+    """Stable per server, so they belong on the cached side with the prompt files."""
+    prompt = build_effective_system_prompt(
+        mcp_instructions={"atria": "An id in the wrong format returns an empty result."}
+    )
+    layer = next(x for x in prompt.layers if x.name == "mcp:atria")
+
+    assert layer.cacheable is True
+    assert "wrong format returns an empty result" in layer.text
+    assert layer.text in prompt.system_instruction
+
+
+def test_server_guidance_sits_below_our_own_rules():
+    """A vendor's guidance informs; it does not outrank the system-rules layer."""
+    prompt = build_effective_system_prompt(mcp_instructions={"atria": "vendor says"})
+    order = names(prompt)
+
+    assert order.index("system-rules") < order.index("mcp:atria")
+    assert order.index("governance") < order.index("mcp:atria")
+    assert order.index("mcp:atria") < order.index("run-context")
+
+
+def test_each_server_gets_its_own_layer():
+    prompt = build_effective_system_prompt(
+        mcp_instructions={"atria": "a", "triplewhale": "b"}
+    )
+    assert {"mcp:atria", "mcp:triplewhale"} <= set(names(prompt))
+
+
+def test_no_servers_means_no_extra_layers():
+    assert not [x for x in build_effective_system_prompt().layers if x.name.startswith("mcp:")]
+
+
+def test_server_guidance_does_not_break_the_cache_invariant():
+    """It is stable per server, so two runs on different days must still match."""
+    instructions = {"atria": "vendor guidance"}
+    first = build_effective_system_prompt(
+        run_context=RunContext(run_id="a", today="2026-01-01"), mcp_instructions=instructions
+    )
+    second = build_effective_system_prompt(
+        run_context=RunContext(run_id="b", today="2099-12-31"), mcp_instructions=instructions
+    )
+    assert first.stable_text == second.stable_text

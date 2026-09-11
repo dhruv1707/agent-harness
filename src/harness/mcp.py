@@ -315,6 +315,10 @@ class MCPBridge:
     #: does not end it. The same rule the agent's own prompt gives it about unreachable
     #: data sources applies to the runtime that feeds it.
     failures: dict[str, str] = field(default_factory=dict, init=False)
+    #: Each server's own guidance, published at connect. Atria's explains things no tool
+    #: description does — that a malformed id returns an empty result rather than an
+    #: error, which otherwise reads as "nothing there" when it means "wrong key".
+    instructions: dict[str, str] = field(default_factory=dict, init=False)
     _stack: AsyncExitStack | None = field(default=None, init=False, repr=False)
 
     async def __aenter__(self) -> MCPBridge:
@@ -355,6 +359,9 @@ class MCPBridge:
         transport = streamable_http_client(server.url, http_client=http_client)
         client = await self._stack.enter_async_context(Client(transport))
         self.clients[server.name] = client
+        published = getattr(client, "instructions", None)
+        if published:
+            self.instructions[server.name] = published
 
     async def discover(self) -> list[Tool]:
         """Every connected server's tools, wrapped as ordinary local tools."""

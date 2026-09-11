@@ -175,6 +175,7 @@ def build_effective_system_prompt(
     override: str | None = None,
     agent: str | None = None,
     append: str | None = None,
+    mcp_instructions: dict[str, str] | None = None,
 ) -> AssembledPrompt:
     """Assemble the system prompt in precedence order.
 
@@ -215,6 +216,20 @@ def build_effective_system_prompt(
             ENTRYPOINT_FILE,
         )
     )
+
+    # 8. What each connected server says about itself. Below our own rules by design —
+    # a vendor's guidance informs, it does not outrank the system-rules layer — but it
+    # carries failure modes no tool description mentions. Stable per server, so it sits
+    # on the cacheable side.
+    for name, text in (mcp_instructions or {}).items():
+        layers.append(
+            Layer(
+                f"mcp:{name}",
+                f"# Guidance from the {name} server\n\n{text.strip()}",
+                True,
+                f"<mcp:{name}>",
+            )
+        )
 
     # ---- cache breakpoint ----
 

@@ -46,6 +46,8 @@ class AgentSession:
     auto_approve: bool = False
     #: Context budget in tokens. None uses the configured default.
     budget: int | None = None
+    #: Server-published guidance, keyed by server name. Set by whoever opened the bridge.
+    mcp_instructions: dict[str, str] = field(default_factory=dict)
     #: None means "pick a terminal asker if someone is there to answer".
     asker: Asker | None = None
 
@@ -107,6 +109,7 @@ class AgentSession:
         """Rebuild the control plane. Run context is fresh every turn, by design."""
         return build_effective_system_prompt(
             agent_dir=self.agent_dir,
+            mcp_instructions=self.mcp_instructions,
             run_context=run_context
             or RunContext(
                 run_id=self.session_id,
