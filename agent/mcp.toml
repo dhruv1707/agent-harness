@@ -62,6 +62,10 @@ tools = [
   "search_library_ads",
   "get_library_ad",
   "get_library_ad_transcript",
+  # The paid counterpart, for a competitor video nobody has transcribed yet. Without it a
+  # cache miss on a library ad is a dead end — transcribe_ad_account_video only works on
+  # the workspace's own videos. Gated behind `ask` like every transcribe_* tool.
+  "transcribe_library_ad",
 
   # --- 5. Brand and product facts ----------------------------------------------
   # The brand id is fixed in CLAUDE.md, so list_owned_brands is not needed.

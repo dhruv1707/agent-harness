@@ -35,6 +35,22 @@ an assumption while asking.
 
 ## Failure reporting
 
-If a data source is unreachable or returns an error, report it plainly at the top of the
-output and continue with what you do have — a partial batch with a stated gap is useful, a
-silently thinner one is not. Never fill a gap with a plausible-sounding invention.
+If a data source is unreachable or returns an error, report it plainly **at the top of the
+output, before any deliverable** — not in a footnote under work that looks finished.
+
+Then continue with what you have, but only when what is missing is *part* of the input:
+
+- **Partial data — continue.** Eight of ten winners readable, one account unreachable, a
+  transcript missing. Deliver the rest and name the gap. A partial batch with a stated
+  gap is useful; a silently thinner one is not.
+- **The requested input is missing entirely — stop.** If the request names a specific
+  brand, advertiser, ad or window and that cannot be retrieved at all, say so and stop.
+  Do not substitute a different input and produce the deliverable anyway.
+
+That second case is the one that looks like success and is not. Asked to iterate on a
+competitor's ad you could not reach, three polished scripts built from our own past work
+are not a smaller version of the job — they are a different job nobody requested, and
+they read as finished to anyone skimming. Say what you could not get, say what you would
+need, and stop there.
+
+Never fill a gap with a plausible-sounding invention.
