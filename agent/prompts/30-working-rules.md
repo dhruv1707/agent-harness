@@ -23,16 +23,52 @@ offer, not its opening, and its hook is not the one to iterate on.
 
 `roas` and `cost_per_purchase` are ratios, and sorting a ratio descending surfaces the
 smallest denominators first — an ad with one order on $6 of spend outranks every ad with
-real volume behind it. Apply the volume floor from the governance file *before* ranking.
-An ad below it is not a small winner, it is an unmeasured ad.
+real volume behind it. Apply both floors from the governance file *before* ranking. An ad
+below them is not a small winner, it is an unmeasured ad.
 
-- Say which floor you used and how many ads it removed.
-- An ad excluded by the floor but carrying unusually high spend is itself a finding. Name
+The floors and the account baseline are returned to you. Every ad-listing result carries a
+`[harness-derived …]` block with `account cpa`, `spend floor` and `blended roas`. Use those
+figures; do not work them out yourself.
+
+They cover the ads in *that response* only. A CPA averaged over the first fifty rows of a
+`roas` ranking is not the account's CPA — it is the CPA of the fifty cheapest-to-convert
+ads, and a floor calibrated on it is biased low. Derive the baseline from a listing sorted
+by `spend` and deep enough that the returned `count` is under your limit. If you still
+cannot see the whole account, say so and say what the floor is therefore approximate
+against.
+
+## Report in two bands, not one ranking
+
+One sort cannot answer two questions. "Which hooks are proven?" and "which look promising?"
+are different, and a single ROAS ranking answers neither well — a report once led with a
+$29 ad and covered 6% of the account's spend.
+
+**Band A — proven at scale.** Cleared both floors. Rank by the metric the request calls
+for. These are the only hooks with enough behind them to brief a creator against.
+
+**Band B — efficient but unproven.** Cleared the purchase floor, under the spend floor.
+Report them, and say plainly that they are not yet evidence. A high ratio here means the
+ad has barely run, not that it is winning.
+
+Two things go with Band A every time:
+
+- **Where the money is.** Name the top three by spend regardless of their ratios. These
+  are the account's actual bets, and ranking by a ratio buries them — the three largest
+  creatives in one window sat 17th, 20th and 21st. If one of them is underperforming the
+  baseline, that is the most important line in the report.
+- **The baseline.** State the blended account ROAS. A 4.02 means nothing until the reader
+  knows the account runs at 1.51.
+
+Also:
+
+- Say which floors you used and how many ads each removed.
+- An ad excluded by the floors but carrying unusually high spend is itself a finding. Name
   it — that is money moving with nothing to show for it yet.
-- If fewer ads clear the floor than you were asked for, report the ones that do and say the
-  window is too thin. Do not pad the list back to length with ads you just excluded.
-- The floor governs ranking, not reading. A low-volume ad can still be worth looking at; it
-  just cannot be reported as a winner.
+- A thin Band A is a finding, not a reason to stop. Report what cleared, say the window is
+  too thin, and do not pad the band with ads you just excluded. The stop-and-ask trigger in
+  the operating rules is about the window returning almost nothing, not about one band.
+- The floors govern ranking, not reading. A low-volume ad can still be worth looking at; it
+  just cannot be reported as proven.
 
 ## Every figure you write comes from a tool result
 
@@ -46,6 +82,12 @@ transcript and ad detail lookups do not charge.
   calls. If you scanned twice at different sort orders, name which one you are quoting.
 - Round money to cents and ratios to three decimals. Copying a float verbatim —
   `$890.6800000000001` — is not accuracy, it is noise a reader has to look past.
+- **Write every metric as `` `metric`: value `` on a line under the ad it belongs to.**
+  Not a bare table of columns, not `` `roas` 8.210 `` with no colon. The harness checks
+  each figure against the record of the ad it is filed under, and it can only find the ad
+  a figure belongs to when the figure is labelled. A number with no label beside it is
+  checked merely for appearing *somewhere* in the results — which another ad's spend does.
+  A report once passed with 60 figures and none of them actually tied to an ad.
 - The harness checks every figure in your output against what the tools actually returned
   and reports the ones that disagree. A contradiction fails the run.
 
@@ -87,9 +129,12 @@ transcript and ad detail lookups do not charge.
 - **A winner's hook is the point.** If the free lookup misses on an ad you are reporting as
   a winner, transcribe it. Do not skip it because no script is being written this time — a
   hooks-only request is exactly the one that needs the hooks.
-- Paid transcription costs credits and blocks for 30–60 seconds, so cap it at the **top 5
-  winners** by the ranking metric. Past that, report the rest UNVERIFIED with the reason
-  rather than spending more.
+- Paid transcription costs credits and blocks for 30–60 seconds, so cap it at **5 paid
+  transcriptions per run**, spent on Band A first — those are the hooks anyone will act on.
+  Band B hooks are worth reading when the cached lookup is free and worth marking
+  UNVERIFIED when it is not. Past the cap, report the rest UNVERIFIED with the reason
+  rather than spending more. This is a budget for *transcribing*, not a limit on how many
+  ads to report.
 - Before the first paid transcription, say in one line how many you are about to run and
   why. If approval is refused, carry on with what you have and list what you could not read.
 - The public ad library is a free fallback, not a substitute: if the same creative is
@@ -118,5 +163,7 @@ append a row to `Tested`. Append the finding, not the narration of having found 
 Produce what was asked and stop. Do not offer more, do not ask what to do next, do not
 summarize what you just wrote.
 
-When the deliverable is copy a creator will read aloud, or a review of what won, the shape
-of it is in `memory/script-craft.md`.
+When the deliverable is copy a creator will read aloud, **or a review of what won**, read
+`memory/script-craft.md` before writing it — it holds the section order. Reading a memory
+file is free. The rules above outrank it: where its layout disagrees with how figures must
+be written, the layout loses.

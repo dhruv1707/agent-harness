@@ -9,6 +9,7 @@ import json
 
 from harness.verify import (
     UNVERIFIED_MARK,
+    derive_totals,
     ids_mentioned,
     index_sources,
     mark_unverified_quotes,
@@ -283,3 +284,101 @@ def test_summarize_corrects_the_brief_it_gets_back():
     measurements = brief.sections["Measurements"]
     assert "9,999" not in measurements, "the model's version is discarded, not merged"
     assert "spend=29.02" in measurements and "roas=8.2102" in measurements
+
+
+# ---- what the check can and cannot see ----------------------------------------
+
+
+def test_an_account_level_figure_is_not_attributed_to_the_ad_above_it():
+    """The two-band report states a blended roas and an account spend. Attribution is
+    positional, so without a heading reset the baseline reads as a claim about whichever
+    winner was listed last — and repair() then rewrites it to that winner's figure."""
+    report = (
+        "#### `6897420294631` — ad\n- `spend`: $29.02\n\n"
+        "### Account baseline\n- Account `spend`: $24,154.00\n- Blended `roas`: 1.51\n"
+    )
+    verdict = verify(report, [ADS])
+
+    assert not verdict.contradicted
+    assert repair(report, [ADS])[0] == report, "a baseline must survive untouched"
+
+
+def test_a_fabricated_ratio_is_caught_even_unlabelled():
+    """Every roas and thumbstop_ratio is below 10. Skipping small numbers as 'structure'
+    left the figures that drive the entire ranking checked by neither pass."""
+    report = "#### `6897420294631` — ad\n- Metrics: `roas` 0.900 | `thumbstop` 0.999\n"
+
+    assert {f.raw for f in verify(report, [ADS]).unsupported} == {"0.900", "0.999"}
+
+
+def test_list_numbering_is_still_not_a_measurement():
+    """The exemption survives, narrowed to whole numbers."""
+    assert verify("#### 1. first\n#### 2. second\nTop 5 ads.\n", [ADS]).ok
+
+
+def test_a_report_that_labels_nothing_says_so_instead_of_passing_clean():
+    """A run reported 'all 60 figures agree' having compared none of them to the ad they
+    were filed under, because the layout carried no `metric: value` pair anywhere."""
+    report = (
+        "#### `6897420294631` — ad\n"
+        "- **Metrics**: `roas` 8.2102 | `purchases` 2.0 | `spend` $29.02\n"
+    )
+    verdict = verify(report, [ADS])
+
+    assert verdict.attributed == 0 and verdict.weakly_checked_only
+    assert "WEAK" in verdict.render()
+
+
+def test_labelled_figures_report_their_own_coverage():
+    report = "#### `6897420294631` — ad\n- `spend`: $29.02\n- `roas`: 8.2102\n"
+    verdict = verify(report, [ADS])
+
+    assert verdict.attributed == 2 and not verdict.weakly_checked_only
+    assert "checked against the ad they are filed under" in verdict.render()
+
+
+# ---- derived totals -----------------------------------------------------------
+
+
+def _ranking(rows):
+    items = [
+        {"platform_ad_id": str(9_000_000_000 + i), "metrics": m} for i, m in enumerate(rows)
+    ]
+    return json.dumps({"status_code": 200, "body": json.dumps({"data": {"items": items}})})
+
+
+def test_totals_are_derived_so_the_model_never_computes_them():
+    """The agent must apply a floor of 2x account CPA and is equally forbidden from
+    stating a metric no tool returned. The harness closes that gap rather than licensing
+    arithmetic it cannot check."""
+    rows = [{"spend": 100.0, "purchases": 2.0, "roas": 2.0} for _ in range(5)]
+    block = derive_totals(_ranking(rows))
+
+    assert "total spend 500" in block
+    assert "total purchases 10" in block
+    assert "account cpa 50" in block
+    assert "spend floor (2x cpa) 100" in block
+    assert "blended roas 2" in block
+
+
+def test_derived_totals_say_what_they_cover():
+    """A limit=50 call on a larger account yields the CPA of those fifty, and a floor
+    quietly calibrated against a truncated page is worse than no floor."""
+    rows = [{"spend": 10.0, "purchases": 1.0, "roas": 1.0} for _ in range(5)]
+
+    assert "only the ads in this response" in derive_totals(_ranking(rows))
+
+
+def test_a_detail_call_gets_no_totals():
+    """One ad is not an account summary."""
+    assert derive_totals(_ranking([{"spend": 10.0, "purchases": 1.0, "roas": 1.0}])) is None
+
+
+def test_derived_figures_pass_verification_because_they_are_in_the_result():
+    """The point of deriving them in the harness: they arrive as tool output, so the
+    report may quote them and the checker recognises them."""
+    rows = [{"spend": 100.0, "purchases": 2.0, "roas": 2.0} for _ in range(5)]
+    payload = _ranking(rows)
+    sources = [payload + derive_totals(payload)]
+
+    assert verify("Spend floor was $100.00 against an account CPA of $50.00.", sources).ok

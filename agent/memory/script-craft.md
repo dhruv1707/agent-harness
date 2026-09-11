@@ -78,20 +78,39 @@ directions, no bracketed notes, no commentary inside it.**
 
 ## The ad-review report
 
-When the deliverable is a review of what won rather than a single piece of copy:
+When the deliverable is a review of what won rather than a single piece of copy. Metrics
+are written `metric: value` under the ad they belong to — never as bare table columns, so
+the harness can check each figure against the right ad.
 
 ```
 ## What won — <window>
-One paragraph. The pattern across the winners, with ad ids. Name the ranking metric you
-used. If tag coverage was partial, say what share of spend it covered.
+One paragraph. The pattern across Band A, with ad ids. Name the ranking metric and both
+floors. State the blended account roas, so the numbers below have a baseline. If tag
+coverage was partial, say what share of spend it covered.
 
-## Hooks
-| Ad | Hook (verbatim first line) | Pattern | ROAS | Thumbstop |
-The winners. Mark UNVERIFIED where you did not read the creative, and say why —
-no cached transcript, untagged, carousel.
+## Where the money is
+The top three by spend, whatever their ratios. One line each:
+`<ad id> — <name>` then `spend: $X | roas: Y | purchases: N`.
+If one is under the blended baseline, say so — it is the most actionable line here.
+
+## Band A — proven at scale
+Cleared both floors. Ranked by the metric asked for. Per ad:
+
+### `<ad id>` — <ad name>
+- `spend`: $X
+- `purchases`: N
+- `roas`: Y
+- `thumbstop_ratio`: Z
+- **Hook:** "<verbatim first line>"  — or UNVERIFIED and why (no cached transcript,
+  untagged, carousel, past the transcription budget)
+- **Pattern:** <from hook-patterns.md; if it fits none, name it and append it>
+
+## Band B — efficient but unproven
+Cleared the purchase floor, under the spend floor. Same per-ad shape. Head the section
+with one line saying these have barely run and are not yet evidence to brief against.
 
 ## Scripts
-The scripts.
+The scripts. Iterate on Band A only, unless asked otherwise.
 
 ## Flags
 Anything a human must decide: claims to approve, data gaps, refused approvals, source

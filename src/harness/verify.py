@@ -19,7 +19,14 @@ which that is right. This is the check that matters.
 
 **Absence.** A figure that appears nowhere in any tool output. Weaker — with several
 hundred numbers in play a fabricated one can collide with an unrelated real one — so a
-clean absence result proves little, while a hit is worth reading.
+clean absence result proves little, while a hit is worth reading. It can never catch a
+*real* figure filed under the wrong ad, which is the common failure.
+
+**The report's format is therefore load-bearing**, and the verdict says so. Only a figure
+written `metric: value` under a heading naming an ad reaches the strong check. A run once
+laid its metrics out as ``- **Metrics**: `roas` 8.210 | `spend` $29.02`` — no colon before
+a number, so no pair — and the verdict read "all 60 figures agree" having compared none of
+them to anything. `Verdict.weakly_checked_only` exists so that cannot recur silently.
 
 It reads any tool payload shaped as *entity id plus metrics*, which is not specific to
 one vendor but is an assumption: a server that reports metrics some other way is checked
@@ -50,8 +57,20 @@ def _blank_dates(text: str) -> str:
     return _ISO_DATE.sub(lambda m: " " * len(m.group(0)), text)
 
 
-#: Below this, a figure is structure rather than measurement — list numbering, "top 5".
+#: A Markdown heading closes the block above it. Attribution is positional, so without
+#: this an account-level `spend:` written under "### Baseline" is read as a claim about
+#: whichever ad was named last — and `repair` then rewrites it to that ad's figure.
+_HEADING = re.compile(r"^\s{0,3}#{1,6}\s")
+
+#: Below this a *whole number* is structure rather than measurement — list numbering,
+#: "top 5". It must not apply to anything with a decimal part: every `roas` and
+#: `thumbstop_ratio` is under 10, and skipping them left the figures that drive the whole
+#: ranking checked by neither pass.
 MIN_INTERESTING = Decimal("10")
+
+
+def _is_structure(value: Decimal) -> bool:
+    return abs(value) < MIN_INTERESTING and value == value.to_integral_value()
 
 
 def _dec(whole: str, frac: str | None) -> Decimal | None:
@@ -192,6 +211,8 @@ def _figures(report: str, index: Index) -> tuple[list[Figure], list[Figure]]:
     entity: str | None = None
 
     for line_no, line in enumerate(report.splitlines()):
+        if _HEADING.match(line):
+            entity = None  # before the id scan, so a heading naming an ad still sets it
         for found in _ID.findall(line):
             if found in index.metrics:
                 entity = found  # a heading names the ad the next lines describe
@@ -227,7 +248,7 @@ def _figures(report: str, index: Index) -> tuple[list[Figure], list[Figure]]:
 
         for match in _NUMBER.finditer(cleaned):
             value = _dec(match.group(1), match.group(2))
-            if value is None or abs(value) < MIN_INTERESTING:
+            if value is None or _is_structure(value):
                 continue
             if match.span(1) in claimed_spans:
                 continue
@@ -243,18 +264,55 @@ class Verdict:
     checked: int
     contradicted: list[Figure]
     unsupported: list[Figure]
+    #: How many figures got the per-ad contradiction check rather than mere existence.
+    #: Only figures written `metric: value` under a named ad can get it, so a report that
+    #: lays its numbers out any other way is barely checked at all — and used to say so
+    #: with the words "all 60 figures agree".
+    attributed: int = 0
+    #: Ads the report names that the tools also reported on. With none, weak-only is
+    #: simply what this report is; with several, it means the format defeated the check.
+    entities: int = 0
 
     @property
     def ok(self) -> bool:
         return not self.contradicted and not self.unsupported
 
+    @property
+    def weakly_checked_only(self) -> bool:
+        """Named ads, and not one figure tied to any of them."""
+        return self.entities > 0 and self.attributed == 0 and self.checked > 0
+
+    def _coverage(self) -> str:
+        weak = self.checked - self.attributed
+        return (
+            f"[verify] {self.attributed} of {self.checked} figures checked against the ad "
+            f"they are filed under; {weak} checked only for existence somewhere"
+        )
+
     def render(self) -> str:
         if not self.checked:
             return "[verify] no figures in the report to check"
-        if self.ok:
-            return f"[verify] all {self.checked} figures agree with the tool results"
 
-        lines = []
+        if self.weakly_checked_only:
+            head = [
+                f"[verify] WEAK — none of the {self.checked} figures could be tied to an "
+                f"ad, though the report names {self.entities}.",
+                "         Write metrics as `metric: value` under the ad they belong to; "
+                "a figure with no label next to it",
+                "         is only checked for appearing somewhere in the tool results, "
+                "which a wrong ad's number does.",
+            ]
+        else:
+            head = [self._coverage()] if self.attributed else []
+
+        if self.ok:
+            return "\n".join(head + [
+                f"[verify] no figure disagrees with the tool results ({self.checked} checked)"
+            ]) if head else (
+                f"[verify] all {self.checked} figures agree with the tool results"
+            )
+
+        lines = list(head)
         if self.contradicted:
             lines.append(
                 f"[verify] {len(self.contradicted)} figure(s) CONTRADICT the tool results:"
@@ -267,7 +325,8 @@ class Verdict:
                 f"[verify] {len(unique)} figure(s) appear in no tool output:"
             )
             lines += [f"         {figure}" for figure in unique]
-        lines.append(f"[verify] {self.checked} figures checked")
+        if not self.weakly_checked_only:
+            lines.append(self._coverage())
         return "\n".join(lines)
 
 
@@ -284,10 +343,13 @@ def verify(report: str, sources: list[str]) -> Verdict:
     unsupported = [
         f for f in loose if not any(_matches(source, f.value) for source in index.numbers)
     ]
+    named = {entity for entity in index.metrics if entity in ids_mentioned(report)}
     return Verdict(
         checked=len(labelled) + len(loose),
         contradicted=contradicted,
         unsupported=unsupported,
+        attributed=len(labelled),
+        entities=len(named),
     )
 
 
@@ -436,3 +498,58 @@ def mark_unverified_quotes(text: str, sources: list[str]) -> tuple[str, list[str
                 text = text.replace(needle, needle + UNVERIFIED_MARK, 1)
                 break
     return text, missing
+
+
+# ---- aggregates the model must not compute for itself -------------------------
+
+#: Below this an aggregate is not an account summary, it is a coincidence. Detail calls
+#: return one ad; a ranking returns a page of them.
+MIN_ADS_FOR_TOTALS = 5
+
+#: An ad that has not spent this many times the typical cost of a sale never had a fair
+#: chance to make one, so its ratio metrics are noise rather than a small result.
+SPEND_FLOOR_CPA_MULTIPLE = 2
+
+
+def derive_totals(rendered: str) -> str | None:
+    """Aggregate a tool result and hand the numbers back as part of that result.
+
+    `10-system-rules.md` forbids stating a metric no tool returned, and the verifier
+    enforces it, so an agent asked to apply a floor of "twice the account CPA" is asked
+    for a figure it is not allowed to produce. Rather than carve an exception for
+    arithmetic — which is exactly the licence that produced `$1,470.92` — the harness does
+    the arithmetic and the model reads it the way it reads any other returned figure.
+
+    Deliberately scoped to the response in hand. A `limit=50` call on a larger account
+    yields the CPA of those fifty, and the block says so rather than implying otherwise.
+    """
+    index = index_sources([rendered])
+    ads = [m for m in index.metrics.values() if m.get("spend") is not None]
+    if len(ads) < MIN_ADS_FOR_TOTALS:
+        return None
+
+    spend = sum((m["spend"] for m in ads), Decimal(0))
+    purchases = sum((m.get("purchases", Decimal(0)) for m in ads), Decimal(0))
+    if spend <= 0:
+        return None
+
+    revenue = sum((m["spend"] * m.get("roas", Decimal(0)) for m in ads), Decimal(0))
+    parts = [
+        f"ads in this response {len(ads)}",
+        f"total spend {_plain(spend)}",
+        f"total purchases {_plain(purchases)}",
+        f"blended roas {_plain(revenue / spend)}",
+    ]
+    if purchases > 0:
+        cpa = spend / purchases
+        parts.append(f"account cpa {_plain(cpa)}")
+        parts.append(
+            f"spend floor ({SPEND_FLOOR_CPA_MULTIPLE}x cpa) "
+            f"{_plain(cpa * SPEND_FLOOR_CPA_MULTIPLE)}"
+        )
+    return (
+        "\n[harness-derived from this result, not returned by the API. These cover only "
+        "the ads in this response, not the whole account:\n "
+        + " | ".join(parts)
+        + "]"
+    )

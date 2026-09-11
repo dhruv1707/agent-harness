@@ -30,6 +30,7 @@ from mcp.client.auth import AuthorizationCodeResult, OAuthClientProvider, TokenS
 from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
 from mcp.shared.auth import OAuthClientMetadata, OAuthClientInformationFull, OAuthToken
 
+from .verify import derive_totals
 from .config import AGENT_DIR, ROOT
 from .permissions import matches_pattern
 from .tools import Tool
@@ -419,13 +420,21 @@ def _disable_output_validation(client: Client, server_name: str) -> None:
 
 
 def _render_result(result: Any) -> str:
-    """Flatten an MCP tool result into text the model can read."""
+    """Flatten an MCP tool result into text the model can read.
+
+    A ranking response also gets its own totals appended. The agent is required to apply a
+    spend floor defined as a multiple of account CPA, and equally forbidden from stating a
+    metric no tool returned — so the harness computes the aggregate and returns it as part
+    of the result, rather than licensing the model to do arithmetic it cannot be checked on.
+    """
     if _field(result, "is_error", "isError", default=False):
         return f"tool error: {_render_content(result)}"
     structured = _field(result, "structured_content", "structuredContent")
     if structured:
-        return json.dumps(structured, indent=2, default=str)
-    return _render_content(result)
+        rendered = json.dumps(structured, indent=2, default=str)
+    else:
+        rendered = _render_content(result)
+    return rendered + (derive_totals(rendered) or "")
 
 
 def _render_content(result: Any) -> str:
