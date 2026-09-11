@@ -33,6 +33,7 @@ Not yet seen in a winner on this account. Usable, but say so when briefing one.
 | `unexpected-visual` | Opens on a shot that does not read as an ad |
 | `contrarian` | States the opposite of the category's common advice |
 | `demo-cold-open` | Product doing the thing, no setup, no talking head |
+| `dramatic-purge` | Discards the entire current setup or category on camera, declaring an immediate complete replacement |
 
 ## Tested
 
