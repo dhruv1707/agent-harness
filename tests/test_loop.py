@@ -464,3 +464,75 @@ def test_an_ordinary_run_is_untouched_by_the_child_check(tmp_path):
     )
 
     assert result.stop_reason == "end_turn" and result.turns == 1
+
+
+def test_findings_are_delivered_even_when_the_children_finished_long_ago(tmp_path):
+    """The flaw async spawning introduced. Asking "is anything still running?" was right
+    while spawning blocked; once the parent outlives the spawn, children finish while it is
+    busy elsewhere. A live run burned three turns announcing it was waiting for reports it
+    already had, because nothing was running so nothing was delivered."""
+    from harness.agents import AgentPool, ChildOutcome
+
+    pool = AgentPool(parent_id="s-p", registry=default_registry(), runs_dir=tmp_path)
+    pool._issued.append("s-p.researcher-1")
+    pool._meta["s-p.researcher-1"] = ("researcher", "read the account")
+    pool._close(
+        ChildOutcome(
+            child_id="s-p.researcher-1",
+            role="researcher",
+            task="read the account",
+            text="ad 6897420294631 spent $29.02",
+        )
+    )
+    assert not pool.pending(), "already finished, nothing in flight"
+
+    client = FakeClient([[*text("nothing more to do")], [*text("now I can synthesize")]])
+    state = LoopState(transcript=Transcript.create("late-delivery", runs_dir=tmp_path))
+    state.project()
+
+    result = asyncio.run(
+        query_loop(
+            state,
+            client=client,
+            prompt=build_effective_system_prompt(),
+            registry=default_registry(),
+            ctx=ToolContext(session_id="s-p", pool=pool),
+        )
+    )
+
+    assert result.turns == 2, "the findings were delivered rather than skipped"
+    assert any(
+        "6897420294631" in "".join(b.get("text", "") for b in s.get("content") or [])
+        for s in state.messages
+        if s.get("type") == "user_input"
+    )
+
+
+def test_findings_are_delivered_once(tmp_path):
+    """`reported` is what stops a second collection repeating them."""
+    from harness.agents import AgentPool, ChildOutcome
+
+    pool = AgentPool(parent_id="s-p", registry=default_registry(), runs_dir=tmp_path)
+    pool._issued.append("s-p.researcher-1")
+    pool._meta["s-p.researcher-1"] = ("researcher", "x")
+    pool._close(ChildOutcome(child_id="s-p.researcher-1", role="researcher", task="x", text="y"))
+
+    client = FakeClient([[*text("a")], [*text("b")]])
+    state = LoopState(transcript=Transcript.create("delivered-once", runs_dir=tmp_path))
+    state.project()
+    asyncio.run(
+        query_loop(
+            state,
+            client=client,
+            prompt=build_effective_system_prompt(),
+            registry=default_registry(),
+            ctx=ToolContext(session_id="s-p", pool=pool),
+        )
+    )
+
+    injected = [
+        s for s in state.messages
+        if s.get("type") == "user_input"
+        and "have finished" in "".join(b.get("text", "") for b in s.get("content") or [])
+    ]
+    assert len(injected) == 1

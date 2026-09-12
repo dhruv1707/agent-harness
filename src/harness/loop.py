@@ -445,7 +445,13 @@ async def _collect_children(ctx: ToolContext | None) -> dict | None:
     delegated — so the ordinary path costs one attribute lookup.
     """
     pool = getattr(ctx, "pool", None)
-    if pool is None or not pool.pending():
+    if pool is None or not pool.spawned:
+        return None
+    # "Anything undelivered?", not "anything still running?". Once the parent can outlive
+    # the spawn, children finish while it is busy elsewhere — and a run that asked only
+    # whether tasks were live silently skipped the results, so the coordinator sat there
+    # announcing it was waiting for reports it already had.
+    if all(child_id in pool.reported for child_id in pool.issued):
         return None
     outcomes = await pool.drain()
     unreported = [o for o in outcomes if o.child_id not in pool.reported]

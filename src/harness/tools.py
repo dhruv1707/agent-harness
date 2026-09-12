@@ -287,10 +287,14 @@ async def spawn_agent(ctx: ToolContext, role: str, task: str) -> str:
     needs — the account, the window, the ads or files.
 
     Spawn everything that does not depend on something else in the same turn, then get on
-    with whatever you can do meanwhile. Their answers arrive once they are all done, in
-    full rather than summarised, because deciding what matters across them is your job and
-    you cannot do it on material already squeezed. You do not need to ask for them and you
-    cannot finish without them.
+    with whatever you can genuinely do meanwhile.
+
+    **Their findings are delivered to you the moment you stop calling tools.** Do not call
+    other tools to pass the time and do not announce that you are waiting — that only
+    delays delivery. When you have nothing else useful to do, simply end your turn and the
+    answers will be in front of you. They arrive in full rather than summarised, because
+    deciding what matters across them is your job and you cannot do it on material already
+    squeezed. You cannot finish the run without them.
 
     Args:
         role: `researcher` gathers and may only read; `implementer` produces the

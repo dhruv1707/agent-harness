@@ -142,6 +142,11 @@ class AgentPool:
     def spawned(self) -> int:
         return len(self._issued)
 
+    @property
+    def issued(self) -> list[str]:
+        """Every child ever started, in spawn order."""
+        return list(self._issued)
+
     def pending(self) -> list[str]:
         """Children still running. `spawned` counts what was issued, not what is live."""
         return list(self._running)
@@ -288,6 +293,9 @@ class AgentPool:
                     "stop_reason": result.stop_reason,
                     "is_error": result.stop_reason != "end_turn",
                     "text": result.text,
+                    # A team run's cost is spread across sessions nobody sees the tail of,
+                    # so a hook is the only place it can be recorded durably.
+                    "usage": dict(result.usage or {}),
                 },
                 self.hooks,
             )

@@ -14,16 +14,15 @@
 #
 # Everything here is commented out. Uncomment to wire something up.
 
-# [[subagent_start]]
-# command = "scripts/log-agent.sh"
+# Pure observation: one line per child in runs/agent-costs.csv. A team run's cost is spread
+# across sessions whose tails nobody sees, so without this "what did last week cost" has no
+# answer. It never blocks — what a run cost is not grounds for refusing it.
+[[subagent_stop]]
+command = "scripts/log-agent-cost.py"
 
-# A deterministic gate, where the verifier is judgement: a script that greps the
-# deliverable for claims the brand has not approved and exits 2 with the reason.
-# Disabled by default, and the reason is instructive. Armed, it bounced a researcher that
-# had been asked to read `brand-voice.md` — a file whose whole job is to *list* the phrases
-# nobody may say. The hook saw "clinically proven" in the payload and objected, correctly by
-# its own rules and uselessly in context. A gate that greps the raw payload will fire on any
-# worker whose job is to report what it read. Scope it to the deliverable, not the evidence.
-# [[subagent_stop]]
-# command = "scripts/check-claims.sh"
-# timeout = 30
+# A deterministic gate where the verifier is judgement. Scoped twice over, because the
+# naive version bounced a researcher for reading the file that lists the banned phrases:
+# it fires only on the implementer, and reads only the spoken script bodies, so naming a
+# claim in the Flags section for sign-off is not punished.
+[[subagent_stop]]
+command = "scripts/check-claims.py"
