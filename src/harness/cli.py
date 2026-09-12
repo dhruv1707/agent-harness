@@ -190,6 +190,15 @@ def _cmd_prompt(args) -> int:
 # ---- harness run -------------------------------------------------------------
 
 
+def _resume_hint(session_id: str) -> str:
+    """No brief is written on an interrupt — that would cost a summarization round trip
+    nobody asked for. The transcript carries everything a resume needs, so say where."""
+    return (
+        f"[interrupted] the turn is on the record: "
+        f'harness run --resume {session_id} "..."'
+    )
+
+
 def _cmd_run(args) -> int:
     common = {
         "model": args.model,
@@ -256,11 +265,7 @@ def _cmd_run(args) -> int:
         # No brief was written — an interrupt should not cost a summarization round trip.
         # The transcript carries everything a resume needs, so point at it.
         print("\n[interrupted]", file=sys.stderr)
-        print(
-            f"[interrupted] the turn is on the record: "
-            f'harness run --resume {session.session_id} "..."',
-            file=sys.stderr,
-        )
+        print(_resume_hint(session.session_id), file=sys.stderr)
         return 130
     except Exception as exc:
         print(f"[error] {_explain(exc)}", file=sys.stderr)
@@ -284,6 +289,13 @@ def _cmd_run(args) -> int:
     )
     # A planning run with nobody to approve did exactly what it was asked to do. The plan
     # is in the transcript; failing the run would be reporting success as an error.
+    # Ctrl-C has two landing sites: caught inside the loop, which returns an "interrupted"
+    # result, or escaping to the handler above. Live testing found the same keystroke
+    # exiting 1 with no resume hint down one path and 130 with one down the other.
+    if result.stop_reason == "interrupted":
+        print(_resume_hint(session.session_id), file=sys.stderr)
+        return 130
+
     if result.stop_reason == "plan_pending":
         print(
             "[plan] proposed, and nobody was available to approve it. Review it above, "
