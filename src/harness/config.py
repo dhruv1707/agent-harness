@@ -76,6 +76,22 @@ MAX_PARALLEL_TOOLS = int(os.environ.get("HARNESS_MAX_PARALLEL_TOOLS", "8"))
 #: Per-tool wall clock. A hung tool must not hang the ledger.
 TOOL_TIMEOUT_SECONDS = float(os.environ.get("HARNESS_TOOL_TIMEOUT", "120"))
 
+#: How long to wait for a person to answer a permission prompt. Generous, because someone
+#: is reading a plan or a diff — but not unbounded: the gate serializes prompts behind a
+#: lock, so one unanswered question parks every sibling waiting to ask, and `drain()` with
+#: it. An unattended terminal denies immediately and never reaches this.
+APPROVAL_TIMEOUT_SECONDS = float(os.environ.get("HARNESS_APPROVAL_TIMEOUT", "600"))
+
+#: How long an `interrupt_behavior="block"` tool may take to finish once an interrupt has
+#: arrived. Letting a half-written file complete is the point; letting a stuck writer make
+#: the interrupt unkillable is not.
+INTERRUPT_DRAIN_SECONDS = float(os.environ.get("HARNESS_INTERRUPT_DRAIN", "30"))
+
+#: Cap on a tool's *error* text. A tool that raises with a megabyte message would otherwise
+#: write a megabyte into the context. Successful results are uncapped here — a transcript
+#: is legitimately long, and pre-summary elision already bounds those.
+MAX_TOOL_ERROR_BYTES = 2_000
+
 #: Session transcripts, one JSONL file per session.
 RUNS_DIR = ROOT / "runs"
 

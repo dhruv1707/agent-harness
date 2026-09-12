@@ -33,7 +33,7 @@ from mcp.shared.auth import OAuthClientMetadata, OAuthClientInformationFull, OAu
 from .verify import derive_totals
 from .config import AGENT_DIR, ROOT
 from .permissions import matches_pattern
-from .tools import Tool
+from .tools import Tool, ToolError
 
 #: Where OAuth tokens land. Gitignored — these are credentials.
 AUTH_DIR = ROOT / ".mcp-auth"
@@ -433,7 +433,9 @@ def _render_result(result: Any) -> str:
     of the result, rather than licensing the model to do arithmetic it cannot be checked on.
     """
     if _field(result, "is_error", "isError", default=False):
-        return f"tool error: {_render_content(result)}"
+        # Raised, not returned. A returned string closes the ledger as a success, which is
+        # how a remote failure reached the model with no error flag on it.
+        raise ToolError(f"tool error: {_render_content(result)}")
     structured = _field(result, "structured_content", "structuredContent")
     if structured:
         rendered = json.dumps(structured, indent=2, default=str)

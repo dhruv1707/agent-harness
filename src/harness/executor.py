@@ -13,6 +13,12 @@ will not race both reads around the write.
 after partitioning and before execution, matching Claude Code's order (`runTools()` →
 `partitionToolCalls()` → per-tool `runToolUse()`, which wraps permission around the call).
 
+**A sibling's failure does not stop its siblings.** Each call is its own task; one raising
+or being denied leaves the others running. That is deliberate and matches chapter 4's
+matrix — *"one tool fails in parallel batch … keep others"* — rather than an absence. A
+tool that must not run after a sibling failed does not exist yet; when one does, it needs a
+way to say so, not a blanket fail-fast.
+
 **The ledger always closes.** Every submitted call produces exactly one outcome, whether it
 succeeded, was denied, raised, timed out, was never started, or was cancelled — each with a
 distinct reason, because the model reads these and should be able to tell "a human declined
@@ -27,10 +33,16 @@ from collections import deque
 from dataclasses import dataclass
 from enum import StrEnum
 
-from .config import MAX_PARALLEL_TOOLS, TOOL_TIMEOUT_SECONDS
+from .config import (
+    APPROVAL_TIMEOUT_SECONDS,
+    INTERRUPT_DRAIN_SECONDS,
+    MAX_PARALLEL_TOOLS,
+    MAX_TOOL_ERROR_BYTES,
+    TOOL_TIMEOUT_SECONDS,
+)
 from .events import ToolCallReady
 from .permissions import PermissionGate, PermissionPolicy
-from .tools import Tool, ToolContext, ToolRegistry
+from .tools import Tool, ToolContext, ToolError, ToolRegistry
 
 
 class CallState(StrEnum):
@@ -46,6 +58,29 @@ class CallState(StrEnum):
     COMPLETED = "completed"
     DENIED = "denied"
     CANCELLED = "cancelled"
+
+
+def _with_caveat(text: str, tool: Tool) -> str:
+    """Say the true thing about what we did and did not stop.
+
+    Cancelling a task unwinds our side of it — the HTTP request, the await. It does not
+    reach an MCP server already executing, and it cannot kill a worker thread. For a tool
+    that only reads, that distinction is academic. For one that changes something, telling
+    the model nothing happened is telling it something false.
+    """
+    if tool.read_only:
+        return text
+    return f"{text} — the work may have completed anyway; check before retrying"
+
+
+def _cap(text: str) -> str:
+    """Bound an error message. A tool raising with a megabyte message would otherwise
+    write a megabyte into the context, and the useful part is at the front."""
+    encoded = text.encode("utf-8")
+    if len(encoded) <= MAX_TOOL_ERROR_BYTES:
+        return text
+    head = encoded[:MAX_TOOL_ERROR_BYTES].decode("utf-8", "ignore")
+    return f"{head}\n[… {len(encoded) - MAX_TOOL_ERROR_BYTES:,} bytes of error text elided]"
 
 
 @dataclass(frozen=True)
@@ -81,6 +116,8 @@ class StreamingToolExecutor:
         gate: PermissionGate | None = None,
         max_parallel: int = MAX_PARALLEL_TOOLS,
         timeout: float = TOOL_TIMEOUT_SECONDS,
+        approval_timeout: float = APPROVAL_TIMEOUT_SECONDS,
+        drain_timeout: float = INTERRUPT_DRAIN_SECONDS,
     ):
         self.registry = registry
         self.ctx = ctx or ToolContext(session_id="local")
@@ -89,6 +126,8 @@ class StreamingToolExecutor:
         self.gate = gate or PermissionGate(PermissionPolicy(default="allow"))
         self.max_parallel = max(1, max_parallel)
         self.timeout = timeout
+        self.approval_timeout = approval_timeout
+        self.drain_timeout = drain_timeout
 
         self._queue: deque[tuple[ToolCallReady, Tool]] = deque()
         self._running: dict[str, tuple[asyncio.Task, Tool]] = {}
@@ -166,12 +205,20 @@ class StreamingToolExecutor:
             self._idle.set()
 
     async def _run(self, call: ToolCallReady, tool: Tool) -> None:
+        verdict_reached = False
         try:
             # Partitioned already; authorize before executing.
             self._states[call.call_id] = CallState.AWAITING_APPROVAL
-            verdict = await self.gate.check(
-                call.call_id, call.name, call.arguments, read_only=tool.read_only
+            # Bounded. The gate serializes interactive prompts behind a lock, so one
+            # unanswered question parks every sibling waiting to ask, and `drain()` with
+            # them. Unbounded approval was the one place a call could hang forever.
+            verdict = await asyncio.wait_for(
+                self.gate.check(
+                    call.call_id, call.name, call.arguments, read_only=tool.read_only
+                ),
+                self.approval_timeout,
             )
+            verdict_reached = True
             if not verdict.allowed:
                 self._states[call.call_id] = CallState.DENIED
                 self._close(
@@ -200,20 +247,37 @@ class StreamingToolExecutor:
 
         except asyncio.TimeoutError:
             self._states[call.call_id] = CallState.CANCELLED
-            self._close(
-                call.call_id,
-                call.name,
-                f"tool timed out after {self.timeout:g}s",
-                True,
-                reason="timeout",
-            )
+            if not verdict_reached:  # the wait was for a person, not the tool
+                self._close(
+                    call.call_id,
+                    call.name,
+                    f"permission denied: no answer within {self.approval_timeout:g}s",
+                    True,
+                    reason="denied",
+                )
+            else:
+                self._close(
+                    call.call_id,
+                    call.name,
+                    _with_caveat(f"tool timed out after {self.timeout:g}s", tool),
+                    True,
+                    reason="timeout",
+                )
         except asyncio.CancelledError:
             # Deliberately not re-raised: cancellation still owes the ledger an entry.
             self._states[call.call_id] = CallState.CANCELLED
             self._close(
-                call.call_id, call.name, "interrupted by the operator", True,
+                call.call_id,
+                call.name,
+                _with_caveat("interrupted by the operator", tool),
+                True,
                 reason="user_interrupt",
             )
+        except ToolError as exc:
+            # The tool wrote this message for the model; pass it through rather than
+            # wrapping it in a class name it does not need to see.
+            self._states[call.call_id] = CallState.CANCELLED
+            self._close(call.call_id, call.name, str(exc), True, reason="tool_error")
         except Exception as exc:
             self._states[call.call_id] = CallState.CANCELLED
             self._close(
@@ -229,6 +293,24 @@ class StreamingToolExecutor:
                 self._barrier_active = False
             self._pump()
 
+    def close_all(self, reason: str = "user_interrupt") -> list[ToolOutcome]:
+        """Close every unclosed call and return the ledger, awaiting nothing.
+
+        The last resort, for when even cancelling is being interrupted. It cannot hang and
+        cannot raise, which is the point: a second Ctrl-C should cost the outcomes that had
+        not closed yet, never the ones that had.
+        """
+        for call_id in self._issued:
+            self._states.setdefault(call_id, CallState.CANCELLED)
+            self._close(
+                call_id,
+                self._names.get(call_id, "?"),
+                "interrupted before this call could be closed",
+                True,
+                reason=reason,
+            )
+        return [self._outcomes[cid] for cid in self._issued]
+
     def _close(
         self,
         call_id: str,
@@ -241,7 +323,11 @@ class StreamingToolExecutor:
         self._outcomes.setdefault(
             call_id,
             ToolOutcome(
-                call_id=call_id, name=name, result=result, is_error=is_error, reason=reason
+                call_id=call_id,
+                name=name,
+                result=_cap(result) if is_error else result,
+                is_error=is_error,
+                reason=reason,
             ),
         )
 
@@ -281,9 +367,19 @@ class StreamingToolExecutor:
             if tool.interrupt_behavior == "cancel":
                 task.cancel()
         if self._running:
-            await asyncio.gather(
-                *(task for task, _tool in self._running.values()), return_exceptions=True
-            )
+            # Bounded. Letting a half-written file finish is the point of `block`; letting
+            # a stuck writer make the interrupt unkillable is not. Past the deadline the
+            # sweep below closes whatever is left.
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(
+                        *(task for task, _tool in self._running.values()),
+                        return_exceptions=True,
+                    ),
+                    self.drain_timeout,
+                )
+            except asyncio.TimeoutError:
+                pass
         self._running.clear()
         self._barrier_active = False
         self._idle.set()

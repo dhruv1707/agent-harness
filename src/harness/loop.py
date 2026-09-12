@@ -271,6 +271,7 @@ async def query_loop(
                     state.turn -= 1  # the turn never ran; do not spend it
                     continue
 
+            await _brief_before_leaving(state, client, model, writer)
             state.stop_reason = "api_error"
             return LoopResult(
                 "api_error", state.turn, last_text, state.usage, f"{type(exc).__name__}: {exc}"
@@ -281,6 +282,7 @@ async def query_loop(
         if stream_error is not None:
             # Per chapter 3: API errors return directly. No retry policy exists yet.
             await _close_ledger(state, executor)
+            await _brief_before_leaving(state, client, model, writer)
             state.stop_reason = "api_error"
             return LoopResult("api_error", state.turn, last_text, state.usage, stream_error)
 
@@ -306,6 +308,7 @@ async def query_loop(
         plan = getattr(gate, "plan", None)
         if plan is not None:
             if plan.pending:
+                await _brief_before_leaving(state, client, model, writer)
                 state.stop_reason = "plan_pending"
                 return LoopResult("plan_pending", state.turn, last_text, state.usage)
             if plan.attempts >= MAX_PLAN_ATTEMPTS:
@@ -405,13 +408,36 @@ async def maybe_compact(
     return True
 
 
+async def _brief_before_leaving(state, client, model, writer) -> None:
+    """Write the continuation brief on an exit the user did not ask for.
+
+    `maybe_write_memory` sits at the tail of a tool-using turn, so every early return used
+    to skip it and a run that died at turn 15 resumed from a brief many turns stale.
+
+    Deliberately *not* called on `interrupted`. Someone pressed Ctrl-C; making them wait
+    for a summarization round trip is the opposite of what they asked for, and the
+    transcript already carries everything a resume needs — attachments are derived from it.
+    """
+    try:
+        await maybe_write_memory(state, client, model, writer, at_stopping_point=True)
+    except Exception:  # noqa: BLE001 - a brief is a convenience; it must not mask the exit
+        pass
+
+
 async def _close_ledger(state: LoopState, executor: StreamingToolExecutor) -> None:
-    """Write a result for every issued call, however the turn ended."""
+    """Write a result for every issued call, however the turn ended.
+
+    `BaseException`, not `Exception`, because `CancelledError` is not an `Exception` in
+    3.8+ — a second interrupt arriving *during* closure used to abandon the ledger
+    half-written and escape the loop entirely. And a failure here used to discard every
+    outcome including the ones that had closed cleanly, so the fallback keeps those: a
+    second Ctrl-C should cost the remainder, not the lot.
+    """
     if executor.issued == 0:
         return
     try:
         outcomes = await executor.cancel()
-    except Exception:  # noqa: BLE001 - a failed cancel must not mask the original exit
-        return
+    except BaseException:  # noqa: BLE001 - a failed cancel must not mask the original exit
+        outcomes = executor.close_all()
     for outcome in outcomes:
         state.record(outcome.to_step(), turn=state.turn)

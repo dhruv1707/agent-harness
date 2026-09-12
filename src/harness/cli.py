@@ -253,7 +253,14 @@ def _cmd_run(args) -> int:
     try:
         result = asyncio.run(go())
     except KeyboardInterrupt:
+        # No brief was written — an interrupt should not cost a summarization round trip.
+        # The transcript carries everything a resume needs, so point at it.
         print("\n[interrupted]", file=sys.stderr)
+        print(
+            f"[interrupted] the turn is on the record: "
+            f'harness run --resume {session.session_id} "..."',
+            file=sys.stderr,
+        )
         return 130
     except Exception as exc:
         print(f"[error] {_explain(exc)}", file=sys.stderr)

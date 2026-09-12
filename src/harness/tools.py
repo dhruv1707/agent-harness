@@ -46,6 +46,19 @@ _JSON_TYPES: dict[type, str] = {
 }
 
 
+class ToolError(Exception):
+    """A tool failed in a way it understands, and says so in its own words.
+
+    Raising this instead of returning an error string is what gets the outcome flagged
+    `is_error`. The executor renders it verbatim rather than as `ToolError: ...`, because
+    the message is already written for the model to read.
+
+    It exists because an MCP server's own error arrived as an ordinary return value, so a
+    remote 401 closed the ledger as a success with no error flag — and the memory gate
+    counted it as one.
+    """
+
+
 @dataclass(frozen=True)
 class ToolContext:
     """Ambient state a tool runs against.
