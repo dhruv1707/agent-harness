@@ -4,7 +4,7 @@ import asyncio
 
 from harness.loop import LoopState, build_runtime, query_loop
 from harness.prompt import RunContext, build_effective_system_prompt
-from harness.tools import ToolRegistry, tool
+from harness.tools import ToolContext, ToolRegistry, default_registry, tool
 from harness.transcript import Transcript
 
 
@@ -389,3 +389,78 @@ def test_the_request_input_matches_the_tree_walk_after_a_real_run():
     first, second = (r["input"] for r in client.requests)
     assert second[: len(first)] == first
     assert len(second) > len(first)
+
+
+# ---- children outstanding ------------------------------------------------------
+
+
+def test_a_turn_will_not_end_while_children_are_still_working(tmp_path):
+    """The chapter calls this "leaked cleanup" and answers it by evicting. Waiting is the
+    better trade: the work is already paid for, and a coordinator that forgets to collect
+    would otherwise throw away three researchers it just spent two minutes on."""
+    from harness.agents import AgentPool, ChildOutcome
+
+    class Finished(AgentPool):
+        """A pool with one child that is about to report."""
+
+        def __init__(self):
+            super().__init__(parent_id="s-p", registry=default_registry(), runs_dir=tmp_path)
+            self._issued.append("s-p.researcher-1")
+            self._meta["s-p.researcher-1"] = ("researcher", "read the account")
+            self._live = True
+
+        def pending(self):
+            return ["s-p.researcher-1"] if self._live else []
+
+        async def drain(self):
+            self._live = False
+            self._close(
+                ChildOutcome(
+                    child_id="s-p.researcher-1",
+                    role="researcher",
+                    task="read the account",
+                    text="ad 6897420294631 spent $29.02",
+                )
+            )
+            return self.ledger()
+
+    client = FakeClient([[*text("spawned, done for now")], [*text("here is the synthesis")]])
+    state = LoopState(transcript=Transcript.create("children-outstanding", runs_dir=tmp_path))
+    state.project()
+
+    result = asyncio.run(
+        query_loop(
+            state,
+            client=client,
+            prompt=build_effective_system_prompt(),
+            registry=default_registry(),
+            ctx=ToolContext(session_id="s-p", pool=Finished()),
+        )
+    )
+
+    assert result.stop_reason == "end_turn"
+    assert result.turns == 2, "the first turn was not allowed to be the last"
+    injected = [
+        s for s in state.messages if s.get("type") == "user_input" and "have finished" in
+        "".join(b.get("text", "") for b in s.get("content") or [])
+    ]
+    assert injected, "the children's findings were recorded as a turn"
+    assert "6897420294631" in "".join(b["text"] for b in injected[0]["content"])
+
+
+def test_an_ordinary_run_is_untouched_by_the_child_check(tmp_path):
+    """No pool means one attribute lookup and nothing else."""
+    client = FakeClient([[*text("done")]])
+    state = LoopState(transcript=Transcript.create("no-children", runs_dir=tmp_path))
+    state.project()
+
+    result = asyncio.run(
+        query_loop(
+            state,
+            client=client,
+            prompt=build_effective_system_prompt(),
+            registry=default_registry(),
+        )
+    )
+
+    assert result.stop_reason == "end_turn" and result.turns == 1

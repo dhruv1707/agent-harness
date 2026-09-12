@@ -287,6 +287,20 @@ async def query_loop(
             return LoopResult("api_error", state.turn, last_text, state.usage, stream_error)
 
         if executor.issued == 0:
+            # A turn may not end while children are still working. The chapter calls the
+            # alternative "leaked cleanup" and answers it by evicting; waiting is the
+            # better trade, because the work is already paid for and a coordinator that
+            # forgets to collect would otherwise silently throw away three researchers.
+            #
+            # This is the one place the loop records a `user_input` step mid-run — every
+            # other `record` writes model output, a thought, or a tool call. It still goes
+            # through `record`, so the tree and the projection cannot drift.
+            harvest = await _collect_children(ctx)
+            if harvest is not None:
+                state.record(harvest, turn=state.turn)
+                last_text = ""
+                continue
+
             state.context_tokens = state.usage.get("total_input_tokens", state.context_tokens)
             await maybe_write_memory(state, client, model, writer, at_stopping_point=True)
             state.stop_reason = "end_turn"
@@ -422,6 +436,36 @@ async def _brief_before_leaving(state, client, model, writer) -> None:
         await maybe_write_memory(state, client, model, writer, at_stopping_point=True)
     except Exception:  # noqa: BLE001 - a brief is a convenience; it must not mask the exit
         pass
+
+
+async def _collect_children(ctx: ToolContext | None) -> dict | None:
+    """Wait for outstanding children and turn their answers into the next user turn.
+
+    Returns None when there is nothing to wait for, which is every run that never
+    delegated — so the ordinary path costs one attribute lookup.
+    """
+    pool = getattr(ctx, "pool", None)
+    if pool is None or not pool.pending():
+        return None
+    outcomes = await pool.drain()
+    unreported = [o for o in outcomes if o.child_id not in pool.reported]
+    pool.reported.update(o.child_id for o in unreported)
+    if not unreported:
+        return None
+    body = "\n\n---\n\n".join(o.render() for o in unreported)
+    return {
+        "type": "user_input",
+        "content": [
+            {
+                "type": "text",
+                "text": (
+                    f"{len(unreported)} agent(s) you started have finished. Their findings "
+                    "follow in full. Work out what matters across them and carry on.\n\n"
+                    + body
+                ),
+            }
+        ],
+    }
 
 
 async def _close_ledger(state: LoopState, executor: StreamingToolExecutor) -> None:

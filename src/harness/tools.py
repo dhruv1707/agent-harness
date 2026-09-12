@@ -273,27 +273,30 @@ def read_memory(ctx: ToolContext, name: str) -> str:
 #: Set by the runtime when a run may delegate. A tool cannot reach the pool any other way,
 #: which is deliberate: spawning is the one capability the model must not be able to
 #: manufacture for itself.
-@tool(
-    concurrency_safe=True,
-    read_only=False,
-    timeout=AGENT_TIMEOUT_SECONDS,
-)
+# Async, but it awaits nothing. The point is only to stay on the event loop: a sync tool
+# runs in a worker thread via `to_thread`, and `create_task` there raises "no running event
+# loop" — which put child ids in the ledger with no task behind them, so nothing waited for
+# them and teardown reported them cancelled.
+@tool(concurrency_safe=True, read_only=False)
 async def spawn_agent(ctx: ToolContext, role: str, task: str) -> str:
-    """Delegate a piece of work to a child agent and wait for what it finds.
+    """Hand a piece of work to a child agent. Returns straight away; it works in the
+    background while you carry on.
 
     The child starts fresh: it sees the same rules and tools you do but none of your
-    conversation, so the task must stand alone. Give it one job and the specifics it needs.
+    conversation, so the task has to stand alone. Give it one job and the specifics it
+    needs — the account, the window, the ads or files.
 
-    Children run concurrently — issue several calls in one turn and they work at the same
-    time. Their answers come back in full, not summarised, because deciding what matters
-    across them is your job and you cannot do it on material already squeezed.
+    Spawn everything that does not depend on something else in the same turn, then get on
+    with whatever you can do meanwhile. Their answers arrive once they are all done, in
+    full rather than summarised, because deciding what matters across them is your job and
+    you cannot do it on material already squeezed. You do not need to ask for them and you
+    cannot finish without them.
 
     Args:
-        role: Which kind of worker. `researcher` gathers and may only read;
-            `implementer` produces the deliverable; `verifier` checks one against the
-            evidence.
+        role: `researcher` gathers and may only read; `implementer` produces the
+            deliverable; `verifier` checks one against the evidence.
         task: What this worker should do, written so someone with no other context could
-            act on it. Name the account, window, ads or files it needs.
+            act on it.
     """
     if ctx.pool is None:
         return "delegation is not available in this run; do the work yourself"
@@ -301,8 +304,10 @@ async def spawn_agent(ctx: ToolContext, role: str, task: str) -> str:
         child_id = ctx.pool.spawn(role, task)
     except (ValueError, FileNotFoundError) as exc:
         return f"cannot spawn: {exc}"
-    outcome = await ctx.pool.wait_for(child_id)
-    return outcome.render()
+    return (
+        f"started {role} `{child_id}`. It is running now — spawn anything else independent "
+        "in this turn, and its findings will reach you when every child has finished."
+    )
 
 
 # `concurrency_safe=False` is load-bearing rather than cautious: the executor treats an

@@ -103,6 +103,16 @@ MAX_CHILDREN_PER_RUN = int(os.environ.get("HARNESS_MAX_CHILDREN", "6"))
 #: makes cost and cancellation unbounded for no benefit anyone has asked for.
 MAX_AGENT_DEPTH = 1
 
+#: How long a lifecycle hook may take. Short, because a hook is a notifier or a check, not
+#: a job — and because the run waits for it. Past this it is abandoned and the run carries
+#: on, since a broken hook must not cost a research run.
+HOOK_TIMEOUT_SECONDS = float(os.environ.get("HARNESS_HOOK_TIMEOUT", "30"))
+
+#: How many times a hook may bounce a child back for another attempt. One, matching the
+#: verifier's revision cap and plan mode's: a gate that can bounce forever is a gate that
+#: will, and the second refusal is rarely more informative than the first.
+MAX_HOOK_BOUNCES = int(os.environ.get("HARNESS_MAX_HOOK_BOUNCES", "1"))
+
 
 #: Cap on a tool's *error* text. A tool that raises with a megabyte message would otherwise
 #: write a megabyte into the context. Successful results are uncapped here — a transcript

@@ -12,7 +12,8 @@ from pathlib import Path
 from .config import CONTEXT_BUDGET_TOKENS, MAX_TURNS, MODEL, cache_floor
 from .events import ToolCallReady, ToolCallStarted
 from .prompt import AssembledPrompt, RunContext, build_effective_system_prompt
-from .agents import AgentPool, load_role
+from .agents import AgentPool, _fingerprint, load_role
+from .hooks import load_hooks
 from .mcp import MCPBridge, load_servers
 from .verify import sources_from_nodes, verify
 from .session import AgentSession
@@ -200,6 +201,38 @@ def _resume_hint(session_id: str) -> str:
     )
 
 
+def _report_children(session) -> None:
+    """What the team cost, after the pool has been drained inside the event loop.
+
+    The cached share is the evidence that the fork kept the prefix intact — a child whose
+    prompt had diverged from its parent's would show none of it.
+    """
+    pool = getattr(session, "pool", None)
+    if pool is None or not pool.spawned:
+        return
+    outcomes = pool.ledger()
+    failed = [o for o in outcomes if o.is_error]
+    print(
+        f"[team] {len(outcomes)} child agent(s)"
+        + (f", {len(failed)} did not finish" if failed else ""),
+        file=sys.stderr,
+    )
+    for outcome in outcomes:
+        used = outcome.usage or {}
+        total, cached = used.get("total_input_tokens"), used.get("total_cached_tokens")
+        if total:
+            share = f", {cached / total:.0%} cached" if cached else ", none cached"
+            print(
+                f"[team]   {outcome.child_id.split('.')[-1]:<15}{total:>8,} in{share}",
+                file=sys.stderr,
+            )
+        elif outcome.is_error:
+            print(
+                f"[team]   {outcome.child_id.split('.')[-1]:<15}{outcome.reason}",
+                file=sys.stderr,
+            )
+
+
 def _attach_pool(session, role_name: str | None) -> None:
     """Only a coordinator may delegate, and only through the pool it is handed here.
 
@@ -220,6 +253,10 @@ def _attach_pool(session, role_name: str | None) -> None:
         max_turns=session.max_turns,
         mcp_instructions=dict(session.mcp_instructions),
         asker=session.gate.asker,
+        # Captured now, after MCP registration, so a child built later can be checked
+        # against what the parent is actually caching.
+        parent_prefix=_fingerprint(session.build_prompt().system_instruction),
+        hooks=load_hooks(),
     )
 
 
@@ -276,6 +313,19 @@ def _cmd_run(args, *, role_name: str | None = None) -> int:
             print(f"  → {event.name}({args_preview})", file=sys.stderr, flush=True)
 
     async def go():
+        try:
+            return await _drive()
+        finally:
+            # Parent dies, children die — and this has to happen *inside* the loop that
+            # created them. Cancelling from a second `asyncio.run` cancels tasks belonging
+            # to a loop that is already closed, which only ever worked because spawning
+            # used to block. A `finally` also covers the interrupt and error paths, which
+            # returned before the old teardown and would now leave orphans.
+            pool = getattr(session, "pool", None)
+            if pool is not None and pool.spawned:
+                await pool.cancel()
+
+    async def _drive():
         servers = [s for s in load_servers(args.mcp_config) if s.enabled]
         if args.no_mcp or not servers:
             if servers and args.no_mcp:
@@ -306,22 +356,15 @@ def _cmd_run(args, *, role_name: str | None = None) -> int:
         # No brief was written — an interrupt should not cost a summarization round trip.
         # The transcript carries everything a resume needs, so point at it.
         print("\n[interrupted]", file=sys.stderr)
+        _report_children(session)
         print(_resume_hint(session.session_id), file=sys.stderr)
         return 130
     except Exception as exc:
         print(f"[error] {_explain(exc)}", file=sys.stderr)
+        _report_children(session)
         return 1
 
-    # Parent dies, children die. Whatever happened above — finished, failed, interrupted —
-    # nothing spawned may still be running when this returns.
-    if getattr(session, "pool", None) is not None and session.pool.spawned:
-        outcomes = asyncio.run(session.pool.cancel())
-        failed = [o for o in outcomes if o.is_error]
-        print(
-            f"[team] {len(outcomes)} child agent(s)"
-            + (f", {len(failed)} did not finish" if failed else ""),
-            file=sys.stderr,
-        )
+    _report_children(session)
 
     print()
     verdict = None

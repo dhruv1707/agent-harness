@@ -10,7 +10,7 @@ import json
 import pytest
 
 from harness.agents import AgentPool, ChildOutcome, load_role, role_policy
-from harness.config import AGENT_DIR
+from harness.config import AGENT_DIR, MAX_AGENT_DEPTH
 from harness.permissions import PermissionPolicy
 from harness.prompt import build_effective_system_prompt
 from harness.session import AgentSession
@@ -235,3 +235,146 @@ def test_every_shipped_role_has_a_description_and_a_policy():
     for role in ROLES:
         assert load_role(role).strip()
         assert isinstance(role_policy(role), PermissionPolicy)
+
+
+# ---- the subagent failure matrix ----------------------------------------------
+#
+# The chapter's six rows, as assertions. Three were already true; three were not.
+
+
+def test_spawning_does_not_block_the_parent(tmp_path):
+    """`registerAsyncAgent` semantics: the parent carries on. It used to await the child,
+    so across two live runs nothing ever actually ran concurrently."""
+    async def scenario():
+        p = pool(tmp_path)
+        p.spawn("researcher", "one")
+        p.spawn("researcher", "two")
+        still_running = p.pending()          # observed before anything is awaited
+        await p.cancel()
+        return still_running
+
+    assert len(run(scenario())) == 2
+
+
+def test_pending_and_ready_describe_different_things(tmp_path):
+    async def scenario():
+        p = pool(tmp_path)
+        p.spawn("researcher", "x")
+        before = (p.pending(), p.ready())
+        await p.cancel()
+        return before, (p.pending(), p.ready())
+
+    (pending_before, ready_before), (pending_after, ready_after) = run(scenario())
+
+    assert pending_before and not ready_before
+    assert not pending_after and len(ready_after) == 1
+
+
+def test_cache_drift_refuses_the_fork(tmp_path):
+    """The chapter's rule is that the cache-safe parameters must align or the fork is
+    refused. Nothing enforced it: a control-plane file edited mid-run would silently drop
+    every child to paying full price, and the only symptom is a usage line."""
+    async def scenario():
+        p = pool(tmp_path, parent_prefix="a-prefix-that-no-longer-matches")
+        p.spawn("researcher", "x")
+        return (await p.drain())[0]
+
+    outcome = run(scenario())
+
+    assert outcome.is_error and outcome.reason == "prefix_divergence"
+    assert "refusing the fork" in outcome.text
+
+
+def test_a_matching_prefix_is_not_refused(tmp_path):
+    """The check must not fire on the ordinary case, or it would refuse every fork.
+
+    Exercises `_drift` directly rather than spawning: a real child would call a real
+    model, and this is asserting a comparison, not a run."""
+    from harness.agents import _fingerprint
+    from harness.session import AgentSession
+
+    child = AgentSession.create("prefix-probe", runs_dir=tmp_path)
+    p = pool(tmp_path, parent_prefix=_fingerprint(child.build_prompt().system_instruction))
+    p.registry = child.registry  # parent and child share one registry, as they do live
+
+    assert p._drift(child) is None
+
+
+def test_a_child_built_on_a_different_registry_is_refused(tmp_path):
+    """Declarations are most of the prefix, so a second registry is a second cache entry
+    even when every tool in it happens to match."""
+    from harness.session import AgentSession
+
+    child = AgentSession.create("registry-probe", runs_dir=tmp_path)
+    p = pool(tmp_path, parent_prefix="anything")
+
+    assert "different tool registry" in (p._drift(child) or "")
+
+
+def test_a_child_pool_cannot_spawn(tmp_path):
+    """Depth capped in code, not only in the role policies — those are a file someone
+    can edit."""
+    async def scenario():
+        p = pool(tmp_path, depth=MAX_AGENT_DEPTH)
+        with pytest.raises(ValueError, match="depth cap"):
+            p.spawn("researcher", "x")
+        return True
+
+    assert run(scenario())
+
+
+def test_a_hook_can_send_a_child_back(tmp_path, monkeypatch):
+    """Exit 2 is a gate a shell script can hold: deterministic where the verifier is
+    judgement. Capped at one bounce, like every other retry in this harness."""
+    from harness import agents
+
+    submissions = []
+
+    class FakeResult:
+        stop_reason, text, usage = "end_turn", "with NASA-grade in it", {}
+
+    class FakeSession:
+        transcript = type("T", (), {"path": tmp_path / "child.jsonl"})()
+
+        async def submit(self, message, **_kwargs):
+            submissions.append(message)
+            return FakeResult()
+
+    objections = iter([("fix the claim"), None])
+    monkeypatch.setattr(agents, "fire", lambda *a, **k: _async(None))
+    monkeypatch.setattr(agents, "objection", lambda _r: next(objections, None))
+
+    p = pool(tmp_path)
+    result = run(p._let_hooks_object(FakeSession(), "s-p.implementer-1", "implementer", FakeResult()))
+
+    assert len(submissions) == 1, "bounced exactly once"
+    assert "fix the claim" in submissions[0]
+    assert result.stop_reason == "end_turn"
+
+
+async def _async(value):
+    return value
+
+
+def test_spawn_stays_on_the_event_loop(tmp_path):
+    """`spawn_agent` must be async even though it awaits nothing. A sync tool runs in a
+    worker thread, where `create_task` raises "no running event loop" — which put child
+    ids in the ledger with no task behind them, so nothing ever waited for them and the
+    teardown reported two perfectly good researchers as cancelled."""
+    import inspect
+
+    from harness.tools import spawn_agent
+
+    assert inspect.iscoroutinefunction(spawn_agent.fn)
+
+
+def test_a_child_never_reaches_the_ledger_without_a_task(tmp_path):
+    """The ordering that made the bug above so hard to see: the id was recorded first, so
+    a failed `create_task` left an entry nothing was running."""
+    async def scenario():
+        p = pool(tmp_path)
+        p.spawn("researcher", "x")
+        assert set(p.pending()) == set(p._issued), "every issued child has a live task"
+        await p.cancel()
+
+    run(scenario())

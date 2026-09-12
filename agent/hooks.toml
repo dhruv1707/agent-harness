@@ -1,0 +1,29 @@
+# Lifecycle hooks: external commands that watch a child agent, and may send it back.
+#
+# A hook runs an arbitrary local command. That is the feature — it is how this harness
+# reaches something it does not know about — and it should not be a surprise to anyone
+# reading this file later.
+#
+# The payload arrives as JSON on stdin: event, agent_id, agent_type, parent_session, and
+# on stop also agent_transcript_path, stop_reason, is_error and the child's text.
+#
+#   exit 0     fine, carry on
+#   exit 2     objection — stderr goes back to the child as its next instruction, once
+#   anything   logged as a broken hook; the run continues
+#   timeout    abandoned; the run continues. A notifier must not cost a research run.
+#
+# Everything here is commented out. Uncomment to wire something up.
+
+# [[subagent_start]]
+# command = "scripts/log-agent.sh"
+
+# A deterministic gate, where the verifier is judgement: a script that greps the
+# deliverable for claims the brand has not approved and exits 2 with the reason.
+# Disabled by default, and the reason is instructive. Armed, it bounced a researcher that
+# had been asked to read `brand-voice.md` — a file whose whole job is to *list* the phrases
+# nobody may say. The hook saw "clinically proven" in the payload and objected, correctly by
+# its own rules and uselessly in context. A gate that greps the raw payload will fire on any
+# worker whose job is to report what it read. Scope it to the deliverable, not the evidence.
+# [[subagent_stop]]
+# command = "scripts/check-claims.sh"
+# timeout = 30

@@ -30,15 +30,26 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import hashlib
+import sys
+
 from .config import (
+    AGENT_DIR,
     AGENT_TIMEOUT_SECONDS,
     INTERRUPT_DRAIN_SECONDS,
+    MAX_AGENT_DEPTH,
     MAX_CHILDREN_PER_RUN,
-    AGENT_DIR,
+    MAX_HOOK_BOUNCES,
 )
+from .hooks import HookConfig, fire, objection
 from .permissions import Asker, PermissionPolicy
 from .session import AgentSession
 from .tools import ToolRegistry
+
+def _fingerprint(text: str) -> str:
+    """A cheap, stable identity for a prompt prefix. Compared, never stored for meaning."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
 
 #: Where role descriptions live, one file per role.
 ROLES_DIR = "roles"
@@ -73,7 +84,10 @@ class ChildOutcome:
     text: str = ""
     stop_reason: str = ""
     is_error: bool = False
-    #: failed | timeout | cancelled | not_started | spawn_error
+    #: Why it did not finish cleanly. Either one of this module's own endings —
+    #: `timeout`, `cancelled`, `spawn_error`, `prefix_divergence`, `depth_exceeded` — or
+    #: the child's own `LoopResult.stop_reason` when the run itself ended badly:
+    #: `max_turns`, `api_error`, `interrupted`, `plan_pending`, `plan_refused`.
     reason: str | None = None
     usage: dict = field(default_factory=dict)
 
@@ -108,15 +122,33 @@ class AgentPool:
     timeout: float = AGENT_TIMEOUT_SECONDS
     drain_timeout: float = INTERRUPT_DRAIN_SECONDS
     max_children: int = MAX_CHILDREN_PER_RUN
+    #: The parent's cacheable prefix, hashed at construction. A child whose prefix differs
+    #: shares no cache with its parent, and the only symptom would be a bill — so the fork
+    #: is refused instead. See `_refuse_on_drift`.
+    parent_prefix: str | None = None
+    #: How deep this pool already is. Children run at depth 1 and may not spawn.
+    depth: int = 0
+    hooks: list[HookConfig] = field(default_factory=list)
 
     _running: dict[str, asyncio.Task] = field(default_factory=dict, init=False)
     _outcomes: dict[str, ChildOutcome] = field(default_factory=dict, init=False)
     _issued: list[str] = field(default_factory=list, init=False)
     _meta: dict[str, tuple[str, str]] = field(default_factory=dict, init=False)
+    #: Children whose findings have already been handed to the parent, so a second
+    #: collection does not repeat them.
+    reported: set[str] = field(default_factory=set, init=False)
 
     @property
     def spawned(self) -> int:
         return len(self._issued)
+
+    def pending(self) -> list[str]:
+        """Children still running. `spawned` counts what was issued, not what is live."""
+        return list(self._running)
+
+    def ready(self) -> list[ChildOutcome]:
+        """Outcomes that have landed. Useful to a caller deciding whether to wait."""
+        return [self._outcomes[cid] for cid in self._issued if cid in self._outcomes]
 
     def child_id(self, role: str) -> str:
         """Named for its parent, so the family is visible in `runs/` without an index."""
@@ -127,15 +159,24 @@ class AgentPool:
 
     def spawn(self, role: str, task: str) -> str:
         """Start a child and return immediately. Its outcome lands in the ledger."""
+        if self.depth >= MAX_AGENT_DEPTH:
+            # Belt to the policy's braces. Every child policy denies `spawn_agent`, but
+            # that is a file someone can edit; this is the invariant.
+            raise ValueError(
+                f"children may not spawn children (depth cap is {MAX_AGENT_DEPTH})"
+            )
         if self.spawned >= self.max_children:
             raise ValueError(
                 f"this run has already spawned {self.spawned} children "
                 f"(cap is {self.max_children})"
             )
         child_id = self.child_id(role)
-        self._issued.append(child_id)
         self._meta[child_id] = (role, task)
-        self._running[child_id] = asyncio.create_task(self._run(child_id, role, task))
+        # The task first: a child that lands in the ledger with nothing running behind it
+        # is a child nothing will ever wait for, and it surfaces much later as "cancelled".
+        task_handle = asyncio.create_task(self._run(child_id, role, task))
+        self._issued.append(child_id)
+        self._running[child_id] = task_handle
         return child_id
 
     async def _run(self, child_id: str, role: str, task: str) -> None:
@@ -155,9 +196,29 @@ class AgentPool:
                 **({"model": self.model} if self.model else {}),
                 **({"max_turns": self.max_turns} if self.max_turns else {}),
             )
+            drift = self._drift(session)
+            if drift is not None:
+                self._close(
+                    self._failed(child_id, role, task, "prefix_divergence", drift)
+                )
+                return
+
+            await fire(
+                "subagent_start",
+                {
+                    "event": "subagent_start",
+                    "agent_id": child_id,
+                    "agent_type": role,
+                    "parent_session": self.parent_id,
+                    "task": task,
+                },
+                self.hooks,
+            )
+
             result = await asyncio.wait_for(
                 session.submit(task, on_text=None, on_event=None), self.timeout
             )
+            result = await self._let_hooks_object(session, child_id, role, result)
             self._close(
                 ChildOutcome(
                     child_id=child_id,
@@ -182,6 +243,75 @@ class AgentPool:
                                      f"{type(exc).__name__}: {exc}"))
         finally:
             self._running.pop(child_id, None)
+
+    def _drift(self, session: AgentSession) -> str | None:
+        """Refuse a fork whose cached prefix no longer matches its parent's.
+
+        The chapter's rule is that `CacheSafeParams` must align or the fork is refused.
+        Nothing enforced it here: a control-plane file edited mid-run, or a tool registered
+        after the pool was built, would silently drop every child to paying full price and
+        the only symptom would be a usage line nobody reads.
+
+        Checked after the session exists and before it submits, so a refusal comes back
+        through `ChildOutcome` like any other failure rather than escaping as an exception.
+        """
+        if self.parent_prefix is None:
+            return None
+        if session.registry is not self.registry:
+            return "the child was built against a different tool registry"
+        prefix = _fingerprint(session.build_prompt().system_instruction)
+        if prefix != self.parent_prefix:
+            return (
+                "the cacheable prefix no longer matches the parent's, so this child would "
+                "share none of its cache — refusing the fork rather than paying for it"
+            )
+        return None
+
+    async def _let_hooks_object(
+        self, session: AgentSession, child_id: str, role: str, result: Any
+    ) -> Any:
+        """Fire `subagent_stop`, and give a blocking hook one chance to send it back.
+
+        Exit 2 means the hook read the output and objected. Its stderr becomes the child's
+        next instruction, in the child's own session, so it revises with everything it
+        already knows rather than starting over.
+        """
+        for _attempt in range(MAX_HOOK_BOUNCES + 1):
+            results = await fire(
+                "subagent_stop",
+                {
+                    "event": "subagent_stop",
+                    "agent_id": child_id,
+                    "agent_type": role,
+                    "parent_session": self.parent_id,
+                    "agent_transcript_path": str(session.transcript.path),
+                    "stop_reason": result.stop_reason,
+                    "is_error": result.stop_reason != "end_turn",
+                    "text": result.text,
+                },
+                self.hooks,
+            )
+            complaint = objection(results)
+            if complaint is None:
+                return result
+            if _attempt >= MAX_HOOK_BOUNCES:
+                print(
+                    f"[hook] {child_id}: still objecting after "
+                    f"{MAX_HOOK_BOUNCES} revision(s); delivering anyway",
+                    file=sys.stderr,
+                )
+                return result
+            print(f"[hook] {child_id}: bounced — {complaint[:120]}", file=sys.stderr)
+            result = await asyncio.wait_for(
+                session.submit(
+                    "A check on your output objected. Fix this and produce the "
+                    f"deliverable again:\n\n{complaint}",
+                    on_text=None,
+                    on_event=None,
+                ),
+                self.timeout,
+            )
+        return result
 
     @staticmethod
     def _failed(child_id: str, role: str, task: str, reason: str, text: str) -> ChildOutcome:
