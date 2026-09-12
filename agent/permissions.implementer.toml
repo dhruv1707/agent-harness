@@ -1,0 +1,17 @@
+# An implementer writes the deliverable and nothing else.
+#
+# It has no research to do — the brief carries what it needs — so the ad-account tools are
+# denied rather than merely discouraged. It may read the brand's own material, because the
+# approved phrasing and the craft rules live there.
+
+default = "deny"
+
+allow = ["list_memory", "read_memory"]
+
+ask = ["append_memory", "append_run_log"]
+
+deny = [
+  "spawn_agent",
+  "submit_plan",
+  "mcp__atria__*",
+]

@@ -52,6 +52,25 @@ class AgentSession:
     asker: Asker | None = None
     #: Start in plan mode: research freely, change nothing, until a plan is approved.
     plan: bool = False
+    #: This session's job, when it is a worker rather than the whole run.
+    #:
+    #: Deliberately *not* the cacheable `agent` prompt layer. That layer sits above
+    #: governance and the MCP guidance, so using it would push both below the role and
+    #: re-bill them once per role. Riding in the opening user turn instead leaves every
+    #: child's cached prefix byte-identical to its parent's, which is the fork's first
+    #: invariant. A role description is a few hundred tokens; the prefix is fifteen
+    #: thousand.
+    role: str | None = None
+    #: Built policy, for a worker that must run narrower than the file on disk. Takes
+    #: precedence over `policy_path`.
+    policy: PermissionPolicy | None = None
+    #: Stamped on this session's opening node. A child records its parent here, so the
+    #: family is readable from the tree itself rather than from a second index that can
+    #: fall out of step — the same mechanism compaction uses for `compacted_from`.
+    root_meta: dict = field(default_factory=dict)
+    #: Set when this run may delegate. `spawn_agent` reaches it through ToolContext and
+    #: nowhere else, so a session that was not given one simply cannot spawn.
+    pool: Any = None
 
     #: The gate enforces plan mode and `submit_plan` ends it, so both must hold the same
     #: object. Built here, once, for exactly that reason.
@@ -71,9 +90,12 @@ class AgentSession:
     def gate(self) -> PermissionGate:
         """Built once per session, so an 'always allow' answer survives later turns."""
         if self._gate is None:
-            path = self.policy_path or (self.agent_dir / "permissions.toml")
+            policy = self.policy
+            if policy is None:
+                path = self.policy_path or (self.agent_dir / "permissions.toml")
+                policy = PermissionPolicy.load(path)
             self._gate = PermissionGate(
-                PermissionPolicy.load(path),
+                policy,
                 asker=self.asker if self.asker is not None else default_asker(),
                 auto_approve=self.auto_approve,
                 plan=self._plan_state,
@@ -85,8 +107,12 @@ class AgentSession:
         return ToolContext(
             session_id=self.session_id,
             agent_dir=self.agent_dir,
-            runs_dir=RUNS_DIR,
+            # The transcript's own directory, not the global one. A session pointed at a
+            # different runs dir had its tools writing to the default anyway, so per-child
+            # isolation was not actually isolating.
+            runs_dir=self.transcript.path.parent,
             plan=self._plan_state,
+            pool=self.pool,
         )
 
     # ---- lifecycle -----------------------------------------------------------
@@ -156,6 +182,12 @@ class AgentSession:
         prompt = self.build_prompt(run_context)
         opening = prompt.initial_input(message)
 
+        if self.role:
+            # Ahead of the run context and the task, because it frames how both are read.
+            opening["content"].insert(
+                0, {"type": "text", "text": "Your job on this run:\n\n" + self.role.strip()}
+            )
+
         carried = SessionMemory.load(self.session_id)
         if carried is not None:
             # Resuming: lead with where things stand, so the model does not have to
@@ -168,7 +200,7 @@ class AgentSession:
                     + carried.render(),
                 },
             )
-        self.transcript.append(opening, turn=0)
+        self.transcript.append(opening, turn=0, meta=self.root_meta or None)
 
         state = LoopState(transcript=self.transcript)
         # Opening a session — or resuming, or branching — is a rebuild point: walk the

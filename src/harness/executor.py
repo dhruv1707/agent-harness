@@ -231,16 +231,17 @@ class StreamingToolExecutor:
                 return
 
             self._states[call.call_id] = CallState.EXECUTING
+            deadline = tool.timeout if tool.timeout is not None else self.timeout
             if inspect.iscoroutinefunction(tool.fn):
                 result = await asyncio.wait_for(
-                    tool.invoke(self.ctx, **call.arguments), self.timeout
+                    tool.invoke(self.ctx, **call.arguments), deadline
                 )
             else:
                 # to_thread keeps a blocking tool off the event loop. Note the thread
                 # itself cannot be killed on cancellation — we stop awaiting it, which is
                 # enough to close the ledger and exit.
                 result = await asyncio.wait_for(
-                    asyncio.to_thread(tool.invoke, self.ctx, **call.arguments), self.timeout
+                    asyncio.to_thread(tool.invoke, self.ctx, **call.arguments), deadline
                 )
             self._states[call.call_id] = CallState.COMPLETED
             self._close(call.call_id, call.name, str(result))
@@ -259,7 +260,7 @@ class StreamingToolExecutor:
                 self._close(
                     call.call_id,
                     call.name,
-                    _with_caveat(f"tool timed out after {self.timeout:g}s", tool),
+                    _with_caveat(f"tool timed out after {deadline:g}s", tool),
                     True,
                     reason="timeout",
                 )

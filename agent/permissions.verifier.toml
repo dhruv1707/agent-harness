@@ -1,0 +1,37 @@
+# A verifier reads the evidence and reports. It never edits what it is judging.
+#
+# Its tool list is identical to everyone else's on purpose: removing declarations would
+# change the cached prefix, which every child shares with the parent byte for byte. The
+# gate is what actually stops a call, so the narrowing happens here.
+
+default = "deny"
+
+allow = [
+  "list_memory",
+  "read_memory",
+  "mcp__atria__get_*",
+  "mcp__atria__list_*",
+  "mcp__atria__search_*",
+  "mcp__atria__resolve_*",
+  "mcp__atria__read_*",
+  "mcp__atria__discover_*",
+  "mcp__atria__suggest_*",
+  "mcp__atria__ping",
+]
+
+# Children do not spawn children: one level of delegation is the design, and a second makes
+# cost and cancellation unbounded. Enforced here rather than by hiding the tool, so the
+# declarations stay identical to the parent's.
+deny = [
+  "spawn_agent",
+  "submit_plan",
+  "append_*",
+  "mcp__atria__transcribe_*",
+  "mcp__atria__create_*",
+  "mcp__atria__save_*",
+  "mcp__atria__follow_*",
+  "mcp__atria__remove_*",
+  "mcp__atria__unfollow_*",
+  "mcp__atria__unsave_*",
+  "mcp__atria__write_*",
+]

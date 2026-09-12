@@ -87,6 +87,23 @@ APPROVAL_TIMEOUT_SECONDS = float(os.environ.get("HARNESS_APPROVAL_TIMEOUT", "600
 #: the interrupt unkillable is not.
 INTERRUPT_DRAIN_SECONDS = float(os.environ.get("HARNESS_INTERRUPT_DRAIN", "30"))
 
+# ---- child agents -------------------------------------------------------------
+
+#: How long a spawned child may run. Far longer than a tool call, because a child *is* a
+#: run: a real research pass against the ad account takes over two minutes. The per-tool
+#: timeout would kill one at 120s and report it as a hung tool.
+AGENT_TIMEOUT_SECONDS = float(os.environ.get("HARNESS_AGENT_TIMEOUT", "600"))
+
+#: How many children one run may spawn in total. A coordinator that misjudges a one-line
+#: question should cost a bounded amount, and a cap is a control a human will actually get
+#: — unlike a permission prompt per child, which nobody reads by the fourth one.
+MAX_CHILDREN_PER_RUN = int(os.environ.get("HARNESS_MAX_CHILDREN", "6"))
+
+#: Children may not spawn children. One level of delegation is the whole design; a second
+#: makes cost and cancellation unbounded for no benefit anyone has asked for.
+MAX_AGENT_DEPTH = 1
+
+
 #: Cap on a tool's *error* text. A tool that raises with a megabyte message would otherwise
 #: write a megabyte into the context. Successful results are uncapped here — a transcript
 #: is legitimately long, and pre-summary elision already bounds those.

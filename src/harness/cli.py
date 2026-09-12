@@ -12,6 +12,7 @@ from pathlib import Path
 from .config import CONTEXT_BUDGET_TOKENS, MAX_TURNS, MODEL, cache_floor
 from .events import ToolCallReady, ToolCallStarted
 from .prompt import AssembledPrompt, RunContext, build_effective_system_prompt
+from .agents import AgentPool, load_role
 from .mcp import MCPBridge, load_servers
 from .verify import sources_from_nodes, verify
 from .session import AgentSession
@@ -199,7 +200,43 @@ def _resume_hint(session_id: str) -> str:
     )
 
 
-def _cmd_run(args) -> int:
+def _attach_pool(session, role_name: str | None) -> None:
+    """Only a coordinator may delegate, and only through the pool it is handed here.
+
+    A session given no pool cannot spawn at all — `spawn_agent` says so and the run
+    carries on alone — which keeps delegation a capability the runtime grants rather than
+    one the model can reach for.
+    """
+    if role_name != "coordinator":
+        return
+    session.pool = AgentPool(
+        parent_id=session.session_id,
+        registry=session.registry,
+        client=session.client,
+        agent_dir=session.agent_dir,
+        runs_dir=session.transcript.path.parent,
+        model=session.model,
+        budget=session.budget,
+        max_turns=session.max_turns,
+        mcp_instructions=dict(session.mcp_instructions),
+        asker=session.gate.asker,
+    )
+
+
+def _cmd_team(args) -> int:
+    """A coordinator that delegates, synthesizes, and hands work to a verifier.
+
+    The same machinery as `run` — one session, one loop — with two additions: the
+    coordinator carries a role, and it is given a pool it can spawn children into. Children
+    share its cached prefix byte for byte and run under their own narrower policies.
+    """
+    args.resume = None
+    args.from_node = None
+    args.plan = False
+    return _cmd_run(args, role_name="coordinator")
+
+
+def _cmd_run(args, *, role_name: str | None = None) -> int:
     common = {
         "model": args.model,
         "max_turns": args.max_turns,
@@ -208,6 +245,8 @@ def _cmd_run(args) -> int:
         "plan": args.plan,
         "budget": args.budget,
     }
+    if role_name:
+        common["role"] = load_role(role_name)
     try:
         if args.resume:
             session = AgentSession.resume(
@@ -241,6 +280,7 @@ def _cmd_run(args) -> int:
         if args.no_mcp or not servers:
             if servers and args.no_mcp:
                 print("[mcp] disabled by --no-mcp", file=sys.stderr)
+            _attach_pool(session, role_name)
             return await session.submit(
                 args.task, on_text=None if args.quiet else on_text, on_event=on_event
             )
@@ -251,6 +291,7 @@ def _cmd_run(args) -> int:
             for entry in discovered:
                 session.registry.register(entry)
             session.mcp_instructions = dict(bridge.instructions)
+            _attach_pool(session, role_name)
             names = ", ".join(sorted(bridge.clients)) or "none"
             print(f"[mcp] {len(discovered)} tools from {names}", file=sys.stderr)
             for failed, why in bridge.failures.items():
@@ -270,6 +311,17 @@ def _cmd_run(args) -> int:
     except Exception as exc:
         print(f"[error] {_explain(exc)}", file=sys.stderr)
         return 1
+
+    # Parent dies, children die. Whatever happened above — finished, failed, interrupted —
+    # nothing spawned may still be running when this returns.
+    if getattr(session, "pool", None) is not None and session.pool.spawned:
+        outcomes = asyncio.run(session.pool.cancel())
+        failed = [o for o in outcomes if o.is_error]
+        print(
+            f"[team] {len(outcomes)} child agent(s)"
+            + (f", {len(failed)} did not finish" if failed else ""),
+            file=sys.stderr,
+        )
 
     print()
     verdict = None
@@ -452,6 +504,21 @@ def main() -> int:
     )
     run.add_argument("-q", "--quiet", action="store_true", help="Suppress streamed text.")
     run.set_defaults(fn=_cmd_run)
+
+    team = sub.add_parser(
+        "team",
+        help="Run a coordinator that delegates to researchers, an implementer and a verifier.",
+    )
+    team.add_argument("task", help="What the team should do.")
+    team.add_argument("--model", default=MODEL, help=f"Default: {MODEL}")
+    team.add_argument("--max-turns", type=int, default=MAX_TURNS)
+    team.add_argument("--budget", type=int, default=None, help="Context budget in tokens.")
+    team.add_argument("--permissions", type=Path, default=None, help="Coordinator policy.")
+    team.add_argument("--yes", action="store_true", help="Approve every 'ask' without asking.")
+    team.add_argument("--mcp-config", type=Path, default=None)
+    team.add_argument("--no-mcp", action="store_true", help="Skip MCP servers for this run.")
+    team.add_argument("-q", "--quiet", action="store_true", help="Suppress streamed text.")
+    team.set_defaults(fn=_cmd_team)
 
     mcp_cmd = sub.add_parser("mcp", help="Connect to MCP servers and list their tools.")
     mcp_cmd.add_argument(

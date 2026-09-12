@@ -21,9 +21,9 @@ import inspect
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, get_type_hints
+from typing import Any, Literal, get_type_hints
 
-from .config import AGENT_DIR, RUNS_DIR
+from .config import AGENT_DIR, AGENT_TIMEOUT_SECONDS, RUNS_DIR
 from .permissions import PlanState
 
 #: Memory files the agent may append to. Everything else under agent/memory/ is curated
@@ -74,6 +74,9 @@ class ToolContext:
     #: Shared with the permission gate, which enforces plan mode while this tool ends it.
     #: None means plan mode is unavailable in this run.
     plan: PlanState | None = None
+    #: The child-agent pool, when this run may delegate. None means it may not, and
+    #: `spawn_agent` says so rather than failing obscurely.
+    pool: Any = None
 
     @property
     def memory_dir(self) -> Path:
@@ -140,6 +143,10 @@ class Tool:
     #: False means "treat it as a write", so a tool nobody thought about is refused in
     #: plan mode rather than quietly permitted.
     read_only: bool = False
+    #: Seconds this tool may run, overriding the executor's default. For the rare tool
+    #: whose work is not tool-shaped — spawning a child agent is a whole run, and the
+    #: 120s default would kill one and call it hung.
+    timeout: float | None = None
     interrupt_behavior: InterruptBehavior = "cancel"
     wants_context: bool = False
 
@@ -163,6 +170,7 @@ def tool(
     *,
     concurrency_safe: bool,
     read_only: bool,
+    timeout: float | None = None,
     interrupt_behavior: InterruptBehavior = "cancel",
 ) -> Callable[[Callable], Tool]:
     """Turn a function into a Tool. The docstring becomes the model-facing description.
@@ -181,6 +189,7 @@ def tool(
             fn=fn,
             concurrency_safe=concurrency_safe,
             read_only=read_only,
+            timeout=timeout,
             interrupt_behavior=interrupt_behavior,
             wants_context=_wants_context(fn),
         )
@@ -259,6 +268,41 @@ def read_memory(ctx: ToolContext, name: str) -> str:
     if not path.is_file():
         return f"no such memory file: {name}"
     return path.read_text(encoding="utf-8")
+
+
+#: Set by the runtime when a run may delegate. A tool cannot reach the pool any other way,
+#: which is deliberate: spawning is the one capability the model must not be able to
+#: manufacture for itself.
+@tool(
+    concurrency_safe=True,
+    read_only=False,
+    timeout=AGENT_TIMEOUT_SECONDS,
+)
+async def spawn_agent(ctx: ToolContext, role: str, task: str) -> str:
+    """Delegate a piece of work to a child agent and wait for what it finds.
+
+    The child starts fresh: it sees the same rules and tools you do but none of your
+    conversation, so the task must stand alone. Give it one job and the specifics it needs.
+
+    Children run concurrently — issue several calls in one turn and they work at the same
+    time. Their answers come back in full, not summarised, because deciding what matters
+    across them is your job and you cannot do it on material already squeezed.
+
+    Args:
+        role: Which kind of worker. `researcher` gathers and may only read;
+            `implementer` produces the deliverable; `verifier` checks one against the
+            evidence.
+        task: What this worker should do, written so someone with no other context could
+            act on it. Name the account, window, ads or files it needs.
+    """
+    if ctx.pool is None:
+        return "delegation is not available in this run; do the work yourself"
+    try:
+        child_id = ctx.pool.spawn(role, task)
+    except (ValueError, FileNotFoundError) as exc:
+        return f"cannot spawn: {exc}"
+    outcome = await ctx.pool.wait_for(child_id)
+    return outcome.render()
 
 
 # `concurrency_safe=False` is load-bearing rather than cautious: the executor treats an
@@ -359,5 +403,12 @@ def append_memory(ctx: ToolContext, name: str, section: str, entry: str) -> str:
 
 def default_registry() -> ToolRegistry:
     return ToolRegistry(
-        [list_memory, read_memory, append_memory, append_run_log, submit_plan]
+        [
+            list_memory,
+            read_memory,
+            append_memory,
+            append_run_log,
+            submit_plan,
+            spawn_agent,
+        ]
     )

@@ -25,6 +25,13 @@ allow = [
   "mcp__atria__discover_*",
   "mcp__atria__suggest_*",
   "mcp__atria__ping",
+
+  # Delegation. Not read-only — a child does whatever its own policy allows — but allowed
+  # rather than asked, because the cap that matters is a count and that lives in code
+  # (MAX_CHILDREN_PER_RUN). A prompt per child is not a control anyone reads by the fourth
+  # one, and `ask` denies it outright unattended, which is where a team earns its keep.
+  # Each child's policy denies this, so there are no grandchildren.
+  "spawn_agent",
 ]
 
 # Writes, or anything with a side effect worth a glance before it happens.
@@ -33,6 +40,7 @@ allow = [
 # a plan is the moment a run stops being read-only, so it should never happen because a
 # flag was passed to a cron job.
 confirm = ["submit_plan"]
+
 
 ask = [
   "append_run_log",
