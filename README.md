@@ -108,7 +108,7 @@ run.
 
 ## How it works
 
-```
+```text
 harness run / team
  └─ control plane ─── layered prompt: identity → rules → plan mode → working rules
  │                    → governance → memory index → data-source guidance
@@ -142,6 +142,82 @@ A few pieces worth knowing about:
 - **Hooks.** `agent/hooks.toml` runs your own commands when a child agent starts or stops.
   Exit 2 sends the hook's objection back to the child. Two ship armed: a cost logger, and a
   check that refuses unapproved claims in spoken script copy.
+
+## Why we built our own harness instead of using LangGraph
+
+LangGraph is a good framework, and for plenty of agents it is the right call. It models an
+agent as a graph — nodes, edges, shared state — and gives you checkpointing, persistence and
+human-in-the-loop interrupts out of the box. If you can draw your workflow before it runs,
+that is most of what you need.
+
+We couldn't, and that turned out to be the whole reason.
+
+**The agent isn't a graph.** The first version of this harness worked like one: a fixed
+sequence written into the prompt — rank the ads, read the transcripts, classify the hooks,
+write the scripts. Nearly ten kilobytes of that procedure rode in every prompt, including one
+asking it to rewrite a landing page headline. So the choreography was deleted
+([`dc2004b`](https://github.com/dhruv1707/agent-harness/commit/dc2004b)), and the agent now chooses its own path from the tools
+and rules it is given. A graph encodes the path up front. What we needed was a loop, and
+control over everything that happens inside each turn of it.
+
+**The parts that matter are the parts a framework owns.** Nearly every hard problem here
+lived below the level a framework exposes:
+
+- **The prompt cache is decided byte by byte.** Child agents share their parent's cached
+  prefix exactly. The role rides in the user turn rather than the system prompt, and children
+  keep tool declarations they are not allowed to call, because removing one would change the
+  prefix. A child whose prefix drifts is refused rather than billed at full price. None of
+  that works unless you own exactly what goes into each request.
+- **Tools start mid-stream.** A tool begins the moment its call finishes streaming, while the
+  model is still writing the rest of its turn. Getting that right came down to a single
+  `await asyncio.sleep(0)` in the event loop ([`6e6c4cf`](https://github.com/dhruv1707/agent-harness/commit/6e6c4cf)).
+- **One permission gate for everything.** Data sources are bridged over MCP as ordinary local
+  tools instead of being handed to the model provider, so every call — local or remote —
+  passes the same allow / ask / confirm / deny policy ([`96e7a4b`](https://github.com/dhruv1707/agent-harness/commit/96e7a4b)).
+- **Context is governed, not just stored.** Compaction replaces history with a brief,
+  re-attaches the task and plan, and has the harness — not the model — write the numbers
+  into it ([`1fdc475`](https://github.com/dhruv1707/agent-harness/commit/1fdc475)).
+
+Each of those is a few lines in a loop you own, and a fight with an abstraction in one you
+don't.
+
+**Provider details are ours to get right.** The harness moved from Anthropic's API to
+Gemini's Interactions API in one commit ([`524ad1c`](https://github.com/dhruv1707/agent-harness/commit/524ad1c)). Gemini signs its
+thought steps and rejects the next request unless each signature is replayed verbatim with
+the history. That kind of detail is simple when you build the request yourself.
+
+**We needed to read every failure.** The runtime is about 5,800 lines, and the loop at its
+centre is under 500. Every serious bug found while building it — a teardown cancelling tasks
+on an event loop that had already closed, compaction truncating the brief it had just
+written, the model's own summary being counted as evidence for its own numbers — was found by
+reading that code and fixed in a single file.
+
+### The same reasoning as Claude Code
+
+This harness was built chapter by chapter alongside *[Harness Engineering: A Design Guide to
+Claude Code](https://harness-books.agentway.dev/en/book1-claude-code/)*, which states the
+premise plainly:
+
+> *"The center of gravity is not model capability, but how the harness organizes constraints
+> and execution."*
+
+The book treats the control plane, the main loop, tool permissions, context governance,
+recovery paths and multi-agent verification as *"one coherent skeleton"* — not features
+bolted onto a model, but the structure that decides whether a capable model stays on course
+once it is plugged into a real system.
+
+Claude Code is built that way: its own query loop, its own streaming tool executor, its own
+permission system, its own context compaction and sub-agents. We made the same bet for a
+creative agent instead of a coding one. The model is an input; the harness is what we are
+actually building.
+
+### When LangGraph is the better choice
+
+If your agent follows a path you can draw before it runs — an approval pipeline, a fixed
+multi-step process, a support flow with known branches — LangGraph gives you that shape,
+along with checkpointing and persistence, for very little code. If the value of your agent
+lives in how it manages context, cost, permissions and failure, you will end up owning those
+parts either way. We chose to own them from the start.
 
 ## Configuring it for your brand
 
