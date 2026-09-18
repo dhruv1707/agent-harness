@@ -1,75 +1,49 @@
 # Agent Harness
 
-**An AI creative strategist for paid social.** It reads what is actually winning in your ad
-account, works out *why*, and turns that into briefs and scripts your creators can shoot —
-then checks its own numbers against the data before you ever see them.
+An LLM agent that does creative strategy for paid social advertising, and the Python runtime
+that runs it.
+
+You give it a task in plain English. It pulls performance data from an ad account, reads the
+ads' transcripts, works out what the best-performing ads have in common, and writes the
+deliverable — a performance review, creator scripts, landing-page copy. Before it returns,
+every number in its answer is checked against the data it actually retrieved.
 
 ```bash
-harness team "review last week's top ads and write 3 iteration scripts on the best hook"
+harness run "which ads performed best last week, and what were their opening lines?"
+harness team "review last week's top ads and write 3 scripts iterating on the best hook"
 ```
 
-It is built as a *harness* rather than a prompt: a runtime that decides what the model sees,
-what it may touch, when it has to stop and ask, and what counts as true. Most of the code
-exists to stop a capable model from being confidently wrong.
+**Stack:** Python 3.10+, Google Gemini (Interactions API), and MCP for connecting data
+sources. No agent framework — the runtime is about 5,800 lines, and [why that is a deliberate
+choice](#why-not-langgraph) is explained below.
 
 ---
 
 ## Who it's for
 
-Teams who brief creators off performance data, and are tired of doing it by hand.
+Teams who write briefs for content creators based on ad performance, and do it by hand today.
 
-- **Creative strategists at DTC brands** — the weekly loop of pulling top ads, reading the
-  hooks, spotting the pattern, and writing the next round of scripts.
-- **Performance creative and UGC teams** — iterating on proven hooks without copying lines
-  from ads that already ran, which is how variations end up testing nothing.
-- **Agencies running paid social** for several brands, where each brand has its own voice,
-  its own approved claims, and its own list of things nobody may say on camera.
-- **Growth teams** who want a creative read on the account — which bets are carrying spend,
-  which are quietly losing money — without waiting on a strategist's calendar.
+- **Creative strategists at DTC brands** — the weekly loop of pulling the top ads, reading
+  their hooks, spotting the pattern, and writing the next round of scripts.
+- **Performance creative and UGC teams** — iterating on proven hooks without reusing lines
+  from ads that already ran, which makes a variation test nothing new.
+- **Agencies running paid social** across several brands, each with its own voice, its own
+  approved product claims, and its own list of things that must not be said on camera.
+- **Growth teams** who want a read on which creative is actually carrying spend, and which is
+  quietly losing money.
 
-It is deliberately scoped to creative. It will tell you when the real problem is budget,
-targeting or a landing page, and stop there.
+It is scoped to creative. When the data points to budget, targeting or a landing page as the
+real problem, it says so and stops there.
 
 ## In use at Plufl
 
 Agent Harness is currently used by creative strategists at **Plufl**, the DTC brand that
 appeared on *Shark Tank*.
 
-The `agent/` directory in this repository is configured for Plufl's account: its brand voice,
-approved claims, hook taxonomy and house script format. To run it for another brand, replace
-that directory — see [Configuring it for your brand](#configuring-it-for-your-brand).
+The `agent/` directory in this repository is configured for Plufl's account. To use it for
+another brand, replace that directory — see [Configuring it for a brand](#configuring-it-for-a-brand).
 
----
-
-## What it does
-
-**Reads the account honestly.** Ranking by ROAS alone sorts by the denominator, so a $6 ad
-with one order outranks everything that actually ran. The harness applies a purchase floor
-and a spend floor of twice the account's own CPA, then reports in two bands — *proven at
-scale* and *efficient but unproven* — plus a standing line naming where the money actually
-is, whatever its ratio.
-
-**Finds the hooks, verbatim.** Hooks come from transcripts, never reconstructed from an ad
-name. A hook it could not read is marked `UNVERIFIED` with the reason, rather than guessed.
-Free cached transcripts are always tried before paid transcription.
-
-**Writes in your voice without copying it.** It borrows the register of your approved
-scripts — the pacing, where the turn lands, how a claim gets deflated — but not their
-sentences. The approved product boilerplate is the one thing reused word for word.
-
-**Checks its own numbers.** Every figure in the output is matched against what the tools
-actually returned, per ad. A number that contradicts the record fails the run. This exists
-because a model will happily report a real ad's id next to a plausible, invented spend
-figure — right about which ad won, wrong about every number beside it.
-
-**Works as a team.** A coordinator spawns researchers in parallel, synthesizes what they
-found into one creative brief, hands it to an implementer, and sends the result to an
-independent verifier that never sees how it was made. The verifier gets one chance to send
-work back.
-
-**Plans before it acts, when you want it to.** In plan mode it researches freely, changes
-nothing, and proposes a plan for a person to approve — the same session then carries on with
-everything it already learned.
+New to paid social? There is a short [glossary](#glossary) at the end.
 
 ---
 
@@ -80,195 +54,267 @@ git clone <this repo> && cd agent-harness
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-echo "GEMINI_API_KEY=..." > .env           # gitignored
-harness mcp atria                           # one-time sign-in to your ad data source
+echo "GEMINI_API_KEY=..." > .env      # gitignored
+harness mcp atria                      # one-time sign-in to the ad data source
 harness run "what won last week?"
+pytest                                 # 289 tests
 ```
 
-Requires Python 3.10+. Runs on Gemini via the Interactions API.
+---
+
+## How a run works
+
+The model does not drive the program. The harness calls the model in a loop and decides what
+it sees, which tools it may use, and what happens to their results.
+
+```text
+task
+ │
+ ├─ 1. build the prompt      layered markdown files from agent/, plus the task
+ │
+ ├─ 2. call the model        stream its response
+ ├─ 3. run tool calls        each starts as soon as the model finishes writing it;
+ │                           concurrency-safe calls run in parallel;
+ │                           every call is permission-checked
+ ├─ 4. collect results       in the order the model asked for them, not the order they finished
+ ├─ 5. record everything     appended to the session's transcript on disk
+ │     └─ repeat 2–5 until the model stops calling tools
+ │
+ └─ 6. check the answer      every figure compared against what the tools returned
+```
+
+In more detail:
+
+**1. Build the prompt.** The system prompt is assembled from markdown files in `agent/`:
+general rules, brand governance, a memory index, and guidance published by each data source.
+It is split in two. The *stable* part is byte-identical on every run, so the model provider
+can cache it; the *per-run* part — today's date, the turn budget, the task — goes in the
+first user message. `harness prompt` prints the assembled result.
+
+**2–3. Call the model, run its tools.** The response streams in. When a tool call finishes
+streaming, it is dispatched immediately, while the model is still producing the rest of its
+response. Tools flagged as safe to run concurrently run up to eight at a time; the rest run
+one at a time. Every call passes a permission check first, and every call has a timeout.
+
+**4. Collect results.** Each tool call gets exactly one result — success, error, timeout,
+denial, or cancellation — and results are handed back in the order the model requested them.
+If a call ever went missing, the model would see a question with no answer and invent one,
+so the harness raises an error instead.
+
+**5. Record everything.** Every step is appended to a transcript file under `runs/`. The
+conversation sent to the model is rebuilt from that file, which is why a session can be
+resumed or branched after the process exits.
+
+**6. Check the answer.** Every figure in the output is matched against the tool results for
+the specific ad it is written under. A figure that contradicts the data fails the run.
+
+Two more things happen when the conversation gets long:
+
+- **Session memory.** Once the conversation passes about 12,000 tokens, the harness
+  periodically writes a structured summary of what has been learned so far.
+- **Compaction.** Near the context limit, older history is replaced by that summary. The
+  original task, any approved plan, and the files the agent had open are re-attached in full,
+  and the metrics in the summary are written by the harness from the tool results rather than
+  recalled by the model.
+
+---
+
+## Repository layout
+
+```text
+src/harness/
+  cli.py             command-line entry point: run, team, prompt, transcript, memory, mcp
+  session.py         opens or resumes a session and runs one task through the loop
+  loop.py            the main loop: call the model, dispatch tools, record, repeat
+  events.py          turns the model's streaming output into typed events
+  executor.py        runs tool calls: concurrency, timeouts, permission checks, results
+  permissions.py     the allow / ask / confirm / deny policy, and plan mode
+  tools.py           built-in tools and the tool registry
+  mcp.py             connects MCP servers and exposes their tools as ordinary local tools
+  prompt.py          assembles the system prompt
+  transcript.py      the session log: append-only JSONL, stored as a tree
+  session_memory.py  the running summary, and the rules for when to write it
+  compaction.py      shrinks the conversation when it gets too long
+  attachments.py     what is carried across a compaction
+  verify.py          checks figures in the output against the tool results
+  agents.py          child agents, for team mode
+  hooks.py           runs your own scripts when a child agent starts or stops
+  config.py          every tunable constant, each with the reason for its value
+agent/               configuration — prompts, brand material, permissions, data sources
+scripts/             the two hook scripts that ship enabled
+tests/               the test suite
+```
+
+---
+
+## Core concepts
+
+**Transcript.** Each session is one JSONL file under `runs/`, holding every step: user
+messages, model output, tool calls and tool results. Steps are stored as a tree, so a session
+can branch from any earlier point. It is the only source of truth — the in-memory
+conversation is rebuilt from it at three points: opening a session, branching, and
+compacting.
+
+**Permission policy.** Every tool call is checked against `agent/permissions.toml` before it
+runs. There are four outcomes: *allow*, *ask* (prompt a person), *confirm* (prompt a person,
+and `--yes` cannot answer on their behalf), and *deny*. When several rules match, the most
+restrictive wins.
+
+**Plan mode.** With `--plan`, any tool that writes or spends money is refused. The agent
+researches, proposes a plan, and a person approves or rejects it. On approval the same
+session continues with everything it already learned.
+
+**Data sources over MCP.** External data — here, Meta ad data via Atria — is connected over
+the Model Context Protocol. The harness is the MCP client and registers each remote tool as a
+local one, so remote calls go through the same permission check as everything else.
+
+**Team mode.** `harness team` runs a *coordinator* agent that starts *child* agents in
+parallel: researchers that may only read, an implementer that writes the deliverable, and a
+verifier that checks it against the evidence without seeing how it was made. The coordinator
+combines the researchers' findings into a single brief for the implementer, and if the
+verifier finds problems, sends the work back to the implementer once. Children cannot start
+children of their own.
+
+**Hooks.** `agent/hooks.toml` names scripts to run when a child agent starts or stops. They
+receive the event as JSON on stdin. Exit code 2 sends the script's stderr back to the child
+as a correction; any other failure is logged and ignored. Two ship enabled: a cost logger,
+and a check that rejects unapproved product claims in script copy.
+
+---
 
 ## Commands
 
 | command | what it does |
 |---|---|
-| `harness run "<task>"` | one agent, one task — the everyday path |
-| `harness run --plan "<task>"` | research first; nothing changes until a person approves the plan |
-| `harness team "<task>"` | coordinator, parallel researchers, implementer, independent verifier |
-| `harness run --resume <id> "<msg>"` | continue a session — or `--from <node>` to branch it |
-| `harness prompt` | assemble and inspect the exact system prompt, with a cache verdict |
-| `harness transcript <id>` | render a session's history as a tree |
-| `harness memory <id>` | show a session's continuation brief |
-| `harness mcp <server>` | connect a data source and list what it exposes |
+| `harness run "<task>"` | run one agent on one task |
+| `harness run --plan "<task>"` | research first; nothing changes until a person approves a plan |
+| `harness team "<task>"` | run a coordinator with researchers, an implementer and a verifier |
+| `harness run --resume <id> "<msg>"` | continue a session; add `--from <node>` to branch it |
+| `harness prompt` | print the assembled system prompt, and whether it is cacheable |
+| `harness transcript <id>` | show a session's steps as a tree |
+| `harness memory <id>` | show a session's running summary |
+| `harness mcp <server>` | connect a data source and list its tools |
 
-Useful flags: `--yes` answers ordinary permission prompts for unattended runs (it will never
-approve a plan), `--no-mcp` runs without data sources, `--max-turns` and `--budget` bound the
-run.
+`--yes` approves ordinary permission prompts for unattended runs, though never a plan.
+`--no-mcp` runs without data sources. `--max-turns` and `--budget` limit the run.
 
 ---
 
-## How it works
-
-```text
-harness run / team
- └─ control plane ─── layered prompt: identity → rules → plan mode → working rules
- │                    → governance → memory index → data-source guidance
- │                    ─ cache breakpoint ─ → run context → your task
- └─ query loop ────── stream the model; dispatch each tool call the moment it completes
-     ├─ executor ──── safe calls in parallel, writes one at a time, every call gated
-     ├─ permissions ─ allow / ask / confirm / deny, plan mode layered on top
-     ├─ ledger ────── exactly one result per call, in the order asked, whatever happened
-     ├─ memory ────── a continuation brief written at coherent moments, not every turn
-     ├─ compaction ── history replaced by the brief, with the task, plan and files re-attached
-     └─ agent pool ── child agents sharing the parent's cached prefix byte for byte
-```
-
-A few pieces worth knowing about:
-
-- **The transcript is the only thing that is true.** Every session is an append-only tree
-  on disk. The in-memory conversation is a projection of it, rebuilt at exactly three
-  points: opening a session, branching, and compacting. Resuming is reopening a file.
-- **Streaming dispatch.** A tool starts the moment its call finishes streaming, while the
-  model is still writing the rest of its turn. Read-only calls run up to eight at a time.
-- **The runtime authorizes; the model only proposes.** Data sources are bridged over MCP as
-  ordinary local tools rather than handed to the provider, so every call passes the same
-  permission gate. Policies live in `agent/permissions*.toml`.
-- **Numbers are transcribed, not recalled.** When the history is compacted, the metrics in
-  the brief are written by the harness from the tool results — not by the model, which by
-  then can no longer see them.
-- **Children share the cache.** Every child agent gets the parent's prompt and full tool
-  list, including tools its policy forbids, because removing a declaration would change the
-  cached prefix. The role rides in the user turn instead. A child whose prefix drifts from
-  its parent's is refused rather than silently billed at full price.
-- **Hooks.** `agent/hooks.toml` runs your own commands when a child agent starts or stops.
-  Exit 2 sends the hook's objection back to the child. Two ship armed: a cost logger, and a
-  check that refuses unapproved claims in spoken script copy.
-
-## Why we built our own harness instead of using LangGraph
-
-LangGraph is a good framework, and for plenty of agents it is the right call. It models an
-agent as a graph — nodes, edges, shared state — and gives you checkpointing, persistence and
-human-in-the-loop interrupts out of the box. If you can draw your workflow before it runs,
-that is most of what you need.
-
-We couldn't, and that turned out to be the whole reason.
-
-**The agent isn't a graph.** The first version of this harness worked like one: a fixed
-sequence written into the prompt — rank the ads, read the transcripts, classify the hooks,
-write the scripts. Nearly ten kilobytes of that procedure rode in every prompt, including one
-asking it to rewrite a landing page headline. So the choreography was deleted
-([`dc2004b`](https://github.com/dhruv1707/agent-harness/commit/dc2004b)), and the agent now chooses its own path from the tools
-and rules it is given. A graph encodes the path up front. What we needed was a loop, and
-control over everything that happens inside each turn of it.
-
-**The parts that matter are the parts a framework owns.** Nearly every hard problem here
-lived below the level a framework exposes:
-
-- **The prompt cache is decided byte by byte.** Child agents share their parent's cached
-  prefix exactly. The role rides in the user turn rather than the system prompt, and children
-  keep tool declarations they are not allowed to call, because removing one would change the
-  prefix. A child whose prefix drifts is refused rather than billed at full price. None of
-  that works unless you own exactly what goes into each request.
-- **Tools start mid-stream.** A tool begins the moment its call finishes streaming, while the
-  model is still writing the rest of its turn. Getting that right came down to a single
-  `await asyncio.sleep(0)` in the event loop ([`6e6c4cf`](https://github.com/dhruv1707/agent-harness/commit/6e6c4cf)).
-- **One permission gate for everything.** Data sources are bridged over MCP as ordinary local
-  tools instead of being handed to the model provider, so every call — local or remote —
-  passes the same allow / ask / confirm / deny policy ([`96e7a4b`](https://github.com/dhruv1707/agent-harness/commit/96e7a4b)).
-- **Context is governed, not just stored.** Compaction replaces history with a brief,
-  re-attaches the task and plan, and has the harness — not the model — write the numbers
-  into it ([`1fdc475`](https://github.com/dhruv1707/agent-harness/commit/1fdc475)).
-
-Each of those is a few lines in a loop you own, and a fight with an abstraction in one you
-don't.
-
-**Provider details are ours to get right.** The harness moved from Anthropic's API to
-Gemini's Interactions API in one commit ([`524ad1c`](https://github.com/dhruv1707/agent-harness/commit/524ad1c)). Gemini signs its
-thought steps and rejects the next request unless each signature is replayed verbatim with
-the history. That kind of detail is simple when you build the request yourself.
-
-**We needed to read every failure.** The runtime is about 5,800 lines, and the loop at its
-centre is under 500. Every serious bug found while building it — a teardown cancelling tasks
-on an event loop that had already closed, compaction truncating the brief it had just
-written, the model's own summary being counted as evidence for its own numbers — was found by
-reading that code and fixed in a single file.
-
-### The same reasoning as Claude Code
-
-This harness was built chapter by chapter alongside *[Harness Engineering: A Design Guide to
-Claude Code](https://harness-books.agentway.dev/en/book1-claude-code/)*, which states the
-premise plainly:
-
-> *"The center of gravity is not model capability, but how the harness organizes constraints
-> and execution."*
-
-The book treats the control plane, the main loop, tool permissions, context governance,
-recovery paths and multi-agent verification as *"one coherent skeleton"* — not features
-bolted onto a model, but the structure that decides whether a capable model stays on course
-once it is plugged into a real system.
-
-Claude Code is built that way: its own query loop, its own streaming tool executor, its own
-permission system, its own context compaction and sub-agents. We made the same bet for a
-creative agent instead of a coding one. The model is an input; the harness is what we are
-actually building.
-
-### When LangGraph is the better choice
-
-If your agent follows a path you can draw before it runs — an approval pipeline, a fixed
-multi-step process, a support flow with known branches — LangGraph gives you that shape,
-along with checkpointing and persistence, for very little code. If the value of your agent
-lives in how it manages context, cost, permissions and failure, you will end up owning those
-parts either way. We chose to own them from the start.
-
-## Configuring it for your brand
+## Configuring it for a brand
 
 Everything brand-specific lives in `agent/`, and none of it is code.
 
 | file | holds |
 |---|---|
-| `CLAUDE.md` | governance — the brand, the account, the metric floors, house conventions |
-| `memory/brand-voice.md` | product facts, approved phrasing, claims that need sign-off |
-| `memory/brief-samples.md` | approved scripts, verbatim — the register to learn from |
-| `memory/hook-patterns.md` | the hook taxonomy, which the agent extends as it finds new ones |
-| `memory/script-craft.md` | how a script is built and how a review report is laid out |
-| `prompts/*.md` | the agent's standing rules — general to creative work, not to one brand |
-| `roles/*.md` | what the coordinator, researcher, implementer and verifier are each for |
-| `permissions*.toml` | what each role may read, write, or must ask about |
+| `CLAUDE.md` | governance: the brand, the ad account, metric thresholds, house conventions |
+| `memory/brand-voice.md` | product facts, approved phrasing, claims that need legal sign-off |
+| `memory/brief-samples.md` | approved scripts, used as a reference for tone |
+| `memory/hook-patterns.md` | a taxonomy of hook types, which the agent adds to as it finds new ones |
+| `memory/script-craft.md` | how a script is structured, and how a review report is laid out |
+| `prompts/*.md` | the agent's standing rules, general to creative work |
+| `roles/*.md` | instructions for each team-mode role |
+| `permissions*.toml` | what each role may read, write, or must ask before doing |
 | `mcp.toml` | which data sources to connect, and which of their tools to load |
-| `hooks.toml` | your own commands to run around child agents |
+| `hooks.toml` | scripts to run when a child agent starts or stops |
 
-## Principles
+---
 
-A few rules the code keeps returning to, each learned from a run that went wrong:
+## Why not LangGraph
 
-- **If it isn't in the transcript, it doesn't survive.** Anything that lives only in memory
-  is gone after a restart or a compaction.
-- **A figure the model wrote is not evidence.** Verification reads what tools returned and
-  what a human asked. The model's own summaries never count as sources, however plausible.
-- **Prevent the failure rather than reporting it.** Wait for children instead of evicting
-  their work; refuse a drifted fork instead of paying for it; bound every wait instead of
-  hoping nothing hangs.
-- **You may fail, but not indefinitely.** Every retry is capped — a plan revision, a
-  verifier bounce, a hook's objection, a failed compaction.
-- **Asking a model to be careful is not a control.** Where something can be checked
-  deterministically, it is.
+LangGraph is a good framework, and for many agents it is the right choice. It represents an
+agent as a graph of steps over shared state, and provides checkpointing, persistence and
+human-in-the-loop pauses. If you know the steps in advance, it gets you there with very
+little code.
+
+We built our own runtime for three reasons.
+
+**1. The steps aren't known in advance.** An early version of this agent ran a fixed
+sequence written into its prompt: rank the ads, read the transcripts, classify the hooks,
+write the scripts. It couldn't do anything else well — a request for a landing-page headline
+still carried nearly ten kilobytes of ad-review instructions. The sequence was removed
+([`dc2004b`](https://github.com/dhruv1707/agent-harness/commit/dc2004b)), and the agent now
+chooses its own tools at each turn. A graph fixes the path ahead of time; this agent needs a
+loop.
+
+**2. The behaviour that matters lives below a framework's abstractions.** Each of these
+depends on controlling exactly what goes into a request, or exactly when code runs:
+
+- *Prompt caching.* Child agents reuse their parent's cached prompt. That only works if the
+  cached portion is byte-identical, so each child's role is placed in the user message rather
+  than the system prompt, and children keep the full tool list — including tools their
+  permissions forbid — because removing one would change the cached bytes.
+- *Starting tools mid-stream.* A tool starts while the model is still generating. This
+  depends on yielding to the event loop at exactly the right point
+  ([`6e6c4cf`](https://github.com/dhruv1707/agent-harness/commit/6e6c4cf)).
+- *One permission check for every call.* Data sources are connected as local tools rather
+  than handed to the model provider, so remote calls cannot bypass the policy
+  ([`96e7a4b`](https://github.com/dhruv1707/agent-harness/commit/96e7a4b)).
+- *What survives a compaction.* The summary's figures are copied from tool results by the
+  harness, not recalled by the model
+  ([`1fdc475`](https://github.com/dhruv1707/agent-harness/commit/1fdc475)).
+- *Provider requirements.* Gemini signs its reasoning steps and rejects a request unless each
+  signature is sent back exactly as received. Switching from Anthropic's API to Gemini's was
+  a single commit ([`524ad1c`](https://github.com/dhruv1707/agent-harness/commit/524ad1c)).
+
+Each of these is a few lines in code you own, and a workaround in code you don't.
+
+**3. Every failure should be readable.** The main loop is under 500 lines. Every serious bug
+found during development — a cleanup step cancelling tasks on an event loop that had already
+closed, compaction cutting off the summary it had just written, the model's own summary being
+treated as evidence for its own figures — was found by reading that code and fixed in one
+file.
+
+**When LangGraph is the better choice.** If your agent follows a path you can draw before it
+runs — an approval pipeline, a fixed multi-step process, a support flow with known branches —
+LangGraph gives you that structure, with checkpointing and persistence, for much less code.
+If the value of your agent is in how it manages context, cost, permissions and failure, you
+end up owning those parts either way.
+
+---
+
+## Design principles
+
+Each of these came from a run that went wrong.
+
+- **If it isn't in the transcript, it doesn't survive.** Anything held only in memory is lost
+  on restart or compaction.
+- **The model's own writing is not evidence.** Verification uses what tools returned and what
+  a person asked for, never a summary the model wrote.
+- **Prevent a failure rather than report it.** Wait for child agents instead of discarding
+  their work; refuse a child whose cached prompt has drifted instead of paying full price;
+  put a timeout on every wait.
+- **Retry, but not forever.** Plan revisions, hook objections and failed compactions are all
+  capped in code.
+- **Asking the model to be careful is not a safeguard.** Anything that can be checked in code
+  is checked in code.
+
+---
 
 ## Limitations
 
-- Built around Meta ad accounts through Atria. Other data sources need an MCP server and a
-  line in `mcp.toml`, but the working rules assume Meta's metrics.
-- Atria's OAuth needs a person to sign in again roughly every twelve hours, so a fully
-  unattended daily schedule is not yet practical.
-- A pending plan does not survive a restart; plan mode is per process.
-- Hooks run local commands named in a config file. That is the feature, and it means
-  `agent/hooks.toml` should be treated like code.
+- Built for Meta ad accounts through Atria. Another data source needs an MCP server and an
+  entry in `mcp.toml`, but the working rules assume Meta's metrics.
+- Atria requires a person to sign in again roughly every twelve hours, so fully unattended
+  daily runs are not yet practical.
+- A plan awaiting approval does not survive a restart.
+- Hooks run local scripts named in a config file, so `agent/hooks.toml` should be reviewed
+  like code.
 
-## Background
+---
 
-Built step by step alongside *[Harness Engineering: A Design Guide to Claude
-Code](https://harness-books.agentway.dev/en/book1-claude-code/)* — the prompt as control
-plane, the query loop, tools and permissions, context governance, and multi-agent
-verification — adapted from a coding agent to a creative one.
+## Glossary
 
-```bash
-pytest   # 289 tests
-```
+For engineers new to paid social.
+
+| term | meaning |
+|---|---|
+| **ROAS** | return on ad spend — revenue divided by spend |
+| **CPA** | cost per acquisition — spend divided by purchases |
+| **Hook** | the first few seconds of a video ad; the line meant to stop someone scrolling |
+| **Thumbstop ratio** | the share of impressions that kept watching past the first three seconds — a measure of the hook |
+| **UGC** | ads in the style of user-generated content, filmed by creators rather than a studio |
+| **Whitelisting** | running ads through a creator's own account with their permission; "creator accounts" |
+| **Brief** | the instructions and scripts a creator receives before filming |
+| **DTC** | direct-to-consumer — a brand selling online, rather than through retailers |
+| **Atria** | the ad analytics platform this agent reads Meta ad data from |
+| **MCP** | Model Context Protocol — a standard way to connect an agent to external tools and data |
