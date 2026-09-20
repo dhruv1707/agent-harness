@@ -37,6 +37,7 @@ from .events import (
     normalize,
 )
 from .executor import StreamingToolExecutor
+from .microcompact import MicrocompactState, maybe_microcompact, reapply
 from .permissions import PermissionGate
 from .prompt import AssembledPrompt
 from .session_memory import MemoryGate, SessionMemory, Writer
@@ -78,7 +79,13 @@ class LoopState:
     #: the tree on every turn would work — it is what we did first — but it leaves the
     #: question "when is the context rebuilt?" with the answer "constantly, implicitly".
     #: Projecting once and appending makes the rebuild points explicit, and there are
-    #: exactly three: loading a session, branching, and compacting.
+    #: exactly four: loading a session, branching, compacting, and microcompacting.
+    #:
+    #: Microcompaction is the odd one out: the other three re-derive the projection *from*
+    #: the tree, while it rewrites the projection so it deliberately says less than the
+    #: tree does. That is the point — "what the model actually sees" is what this field
+    #: means, and after stale results are cleared the model genuinely sees less. The tree
+    #: still holds all of it, which is why `verify` reads the tree and not this.
     #:
     #: Every append goes through `record()` so the two cannot drift.
     messages: list[dict] = field(default_factory=list)
@@ -91,6 +98,12 @@ class LoopState:
     #: Current context size, read from the last response rather than counted — free
     #: and exact, where a count_tokens round trip would be neither.
     context_tokens: int = 0
+    #: (turn, input tokens, cached tokens) per turn. The provider already reports both and
+    #: nothing read `total_cached_tokens` before this, which left the cache unobservable
+    #: from inside a run. Microcompaction's whole cost argument is a claim about this
+    #: series — cached tokens collapse on the turn a clearing fires and recover on the
+    #: next — so it needs to be visible rather than argued about.
+    cache_history: list[tuple[int, int, int]] = field(default_factory=list)
     #: Consecutive compaction failures. Three and we stop trying.
     compact_failures: int = 0
     compactions: int = 0
@@ -101,6 +114,12 @@ class LoopState:
     memory_gate: MemoryGate = field(default_factory=MemoryGate)
     session_memory: SessionMemory | None = None
 
+    #: Which tool results microcompaction has cleared. Shared by reference with the
+    #: `Session` that owns it, the way `PlanState` is shared with the permission gate — a
+    #: fresh `LoopState` is built per submission, so a set held here alone would forget
+    #: everything between submissions and restore results the last one cleared.
+    micro: MicrocompactState = field(default_factory=MicrocompactState)
+
 
     # ---- the projection ------------------------------------------------------
 
@@ -108,9 +127,30 @@ class LoopState:
         """Rebuild the working context from the tree.
 
         Called at the three points where the tree's shape changes under us: opening a
-        session, branching to a different node, and compacting.
+        session, branching to a different node, and compacting. Microcompaction is the
+        fourth rebuild point but does not come through here — it rewrites the projection
+        rather than re-deriving it.
+
+        The tree still holds every tool result in full, so a plain walk would undo any
+        clearing microcompaction has done. Re-applying the cleared set keeps the rebuild
+        faithful to what the model was last shown.
         """
-        self.messages = self.transcript.steps()
+        self.messages = reapply(self.transcript.steps(), self.micro)
+
+    def note_usage(self) -> None:
+        """Take the context size and cache hit off the last response.
+
+        Both numbers arrive free in every response. Called at each point a turn can end,
+        so `cache_history` has one row per model call.
+        """
+        self.context_tokens = self.usage.get("total_input_tokens", self.context_tokens)
+        self.cache_history.append(
+            (
+                self.turn,
+                self.usage.get("total_input_tokens", 0),
+                self.usage.get("total_cached_tokens", 0),
+            )
+        )
 
     def record(self, step: dict, *, turn: int = 0, meta: dict | None = None):
         """Append to the durable tree and the in-memory projection together.
@@ -178,6 +218,13 @@ async def query_loop(
             return LoopResult("max_turns", state.turn, last_text, state.usage)
 
         state.turn += 1
+        # Before the request is assembled, not after: the whole point is to shrink what
+        # this turn sends. Reads the tree for timestamps, rewrites only the projection.
+        cleared = maybe_microcompact(
+            state.messages, state.transcript.path_to_root(), state.micro
+        )
+        if cleared is not None:
+            state.messages = cleared
         runtime = build_runtime(state, prompt, registry, model)
         # A fresh executor per turn: a turn's ledger must not leak into the next one.
         turn_ctx = replace(ctx or ToolContext(session_id="local"), turn=state.turn)
@@ -301,7 +348,7 @@ async def query_loop(
                 last_text = ""
                 continue
 
-            state.context_tokens = state.usage.get("total_input_tokens", state.context_tokens)
+            state.note_usage()
             await maybe_write_memory(state, client, model, writer, at_stopping_point=True)
             state.stop_reason = "end_turn"
             return LoopResult("end_turn", state.turn, last_text, state.usage)
@@ -329,7 +376,7 @@ async def query_loop(
                 state.stop_reason = "plan_refused"
                 return LoopResult("plan_refused", state.turn, last_text, state.usage)
 
-        state.context_tokens = state.usage.get("total_input_tokens", state.context_tokens)
+        state.note_usage()
         state.memory_gate.observe_tool_calls(
             len(outcomes), sum(1 for o in outcomes if o.is_error)
         )

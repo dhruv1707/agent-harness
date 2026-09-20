@@ -370,6 +370,14 @@ def _cmd_run(args, *, role_name: str | None = None) -> int:
     verdict = None
     usage = f" usage={result.usage}" if result.usage else ""
     print(f"[{result.stop_reason}] turns={result.turns}{usage}", file=sys.stderr)
+    micro = session.microcompaction
+    if micro.clearings:
+        print(
+            f"[microcompact] {micro.clearings} clearing(s), "
+            f"{micro.reclaimed_bytes:,} bytes of tool results dropped from context "
+            f"({len(micro.cleared)} results)",
+            file=sys.stderr,
+        )
     if result.error:
         print(f"[error] {result.error}", file=sys.stderr)
     # Governance, not advice: the transcript holds every byte every tool returned, so

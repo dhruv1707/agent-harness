@@ -153,7 +153,8 @@ tests/               the test suite
 messages, model output, tool calls and tool results. Steps are stored as a tree, so a session
 can branch from any earlier point. It is the only source of truth — the in-memory
 conversation is rebuilt from it at three points: opening a session, branching, and
-compacting.
+compacting. The in-memory copy can say *less* than the transcript does, once
+microcompaction has cleared stale tool results from it, but never more.
 
 **Permission policy.** Every tool call is checked against `agent/permissions.toml` before it
 runs. There are four outcomes: *allow*, *ask* (prompt a person), *confirm* (prompt a person,
@@ -174,6 +175,14 @@ verifier that checks it against the evidence without seeing how it was made. The
 combines the researchers' findings into a single brief for the implementer, and if the
 verifier finds problems, sends the work back to the implementer once. Children cannot start
 children of their own.
+
+**Microcompaction.** Tool results are about 92% of the bytes in a long run, and most go
+stale quickly — a listing pulled twenty turns ago is rarely read again. Microcompaction
+replaces old tool results with a short placeholder, keeping the five most recent. It runs
+in two cases: when more than an hour has passed since the model last spoke, which means the
+provider's prompt cache has expired and shrinking the context costs nothing; and when tool
+results pile past a threshold during an active session. The transcript keeps every byte, so
+this only narrows what the model re-reads, never what the harness checks figures against.
 
 **Hooks.** `agent/hooks.toml` names scripts to run when a child agent starts or stops. They
 receive the event as JSON on stdin. Exit code 2 sends the script's stderr back to the child

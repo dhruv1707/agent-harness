@@ -149,6 +149,39 @@ KEEP_RECENT_SHARE = 0.20
 MIN_STEPS_TO_COMPACT = 8
 
 
+# ---- microcompaction ---------------------------------------------------------
+#
+# Compaction is all-or-nothing: a model call, a new root, the old history gone. Between
+# those events nothing reclaims anything, and tool results are ~92% of the byte mass.
+# Microcompaction is the cheap incremental version — no model call, no summary, just
+# replacing stale tool results with a placeholder.
+
+MICROCOMPACT_ENABLED = os.environ.get("HARNESS_MICROCOMPACT", "1") != "0"
+
+#: Gap since the last model output, in minutes, after which the prompt cache is assumed
+#: dead and clearing is therefore free. Google documents no implicit-cache TTL at all —
+#: the published numbers are the token minimums in CACHE_FLOOR_TOKENS above — so this is
+#: reasoned from guaranteed expiry rather than read off a stated lifetime: at an hour, any
+#: implicit cache is long gone, so we never force a miss that would not have happened.
+MICROCOMPACT_GAP_MINUTES = float(os.environ.get("HARNESS_MICROCOMPACT_GAP_MINUTES", "60"))
+
+#: Tool results kept verbatim. Everything older is replaced. Five is enough working
+#: context to carry on from and few enough that what we keep is smaller than what we
+#: remove — which is the condition that makes a warm-cache clearing pay for itself.
+MICROCOMPACT_KEEP_RECENT = int(os.environ.get("HARNESS_MICROCOMPACT_KEEP", "5"))
+
+#: Tool results in context before the count trigger fires. Unlike the time-based trigger
+#: this one fires while the cache is warm and costs one uncached turn.
+MICROCOMPACT_TOOL_THRESHOLD = int(os.environ.get("HARNESS_MICROCOMPACT_THRESHOLD", "12"))
+
+#: Don't break a warm cache for less than this. A cache miss costs you whatever you are
+#: sending *after* the clearing, and saves you what you removed on every turn after — so
+#: the trade is good only when we remove more than we keep. Clearing 5k while keeping 75k
+#: is worse than doing nothing. The time-based path ignores this: it has no miss to
+#: justify, because the cache had already expired.
+MICROCOMPACT_MIN_RECLAIM_BYTES = int(os.environ.get("HARNESS_MICROCOMPACT_MIN_RECLAIM", "20000"))
+
+
 def compact_threshold(budget: int | None = None) -> int:
     """Context size at which compaction should run, in tokens.
 

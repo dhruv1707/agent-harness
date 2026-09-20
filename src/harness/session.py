@@ -17,6 +17,7 @@ from typing import Any
 from .compaction import summarize
 from .config import AGENT_DIR, MAX_TURNS, MODEL, RUNS_DIR
 from .loop import LoopResult, LoopState, query_loop
+from .microcompact import MicrocompactState
 from .permissions import Asker, PermissionGate, PermissionPolicy, PlanState, default_asker
 from .session_memory import SessionMemory
 from .prompt import AssembledPrompt, RunContext, build_effective_system_prompt
@@ -76,8 +77,14 @@ class AgentSession:
     #: object. Built here, once, for exactly that reason.
     _plan_state: PlanState = field(init=False, repr=False, default=None)  # type: ignore[assignment]
 
+    #: Held here rather than on the LoopState for the same reason: a fresh LoopState is
+    #: built per submission, so a cleared set living there would be forgotten between
+    #: submissions and the next turn would restore every result the last one cleared.
+    _micro: MicrocompactState = field(init=False, repr=False, default=None)  # type: ignore[assignment]
+
     def __post_init__(self) -> None:
         self._plan_state = PlanState(active=self.plan)
+        self._micro = MicrocompactState()
 
     _gate: PermissionGate | None = field(default=None, init=False, repr=False)
     _active: bool = field(default=False, init=False, repr=False)
@@ -85,6 +92,11 @@ class AgentSession:
     @property
     def session_id(self) -> str:
         return self.transcript.session_id
+
+    @property
+    def microcompaction(self) -> MicrocompactState:
+        """What microcompaction has cleared this session, for reporting."""
+        return self._micro
 
     @property
     def gate(self) -> PermissionGate:
@@ -202,7 +214,7 @@ class AgentSession:
             )
         self.transcript.append(opening, turn=0, meta=self.root_meta or None)
 
-        state = LoopState(transcript=self.transcript)
+        state = LoopState(transcript=self.transcript, micro=self._micro)
         # Opening a session — or resuming, or branching — is a rebuild point: walk the
         # tree once here, then append for the rest of the run.
         state.project()
