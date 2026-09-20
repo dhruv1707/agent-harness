@@ -4,6 +4,7 @@ The entrypoint caps come from Claude Code's memory governance: an index file is 
 every single run, so if it is allowed to grow it quietly drags context down forever.
 """
 
+import json
 import os
 from pathlib import Path
 
@@ -115,9 +116,29 @@ MAX_HOOK_BOUNCES = int(os.environ.get("HARNESS_MAX_HOOK_BOUNCES", "1"))
 
 
 #: Cap on a tool's *error* text. A tool that raises with a megabyte message would otherwise
-#: write a megabyte into the context. Successful results are uncapped here — a transcript
-#: is legitimately long, and pre-summary elision already bounds those.
+#: write a megabyte into the context. Successful results are bounded separately, by the
+#: size gate below — this one stays because an error is never worth persisting.
 MAX_TOOL_ERROR_BYTES = 2_000
+
+
+# ---- tool result size gate ---------------------------------------------------
+#
+# Compaction and microcompaction both act on results *already* in the context. This is
+# the gate in front of it. The corpus says the gate is the part that was missing: across
+# runs/, list_ad_account_creative_tags medians 284 KB and the largest single result on
+# record is 292 KB — a quarter of the whole budget arriving in one step.
+
+#: Ceiling for one result. Past this the full text goes to a file and the model is sent a
+#: preview and the path. A tool may declare a lower limit, or opt out entirely.
+DEFAULT_MAX_RESULT_SIZE_CHARS = int(os.environ.get("HARNESS_MAX_RESULT_CHARS", "50000"))
+
+#: Ceiling for all results returned by one round of parallel calls. Four tools can each
+#: hit the per-result ceiling and still fit — 200k/50k = 4 — so this exists for the fifth.
+#: Groups are judged independently: 150k in one round and 150k in the next are both fine.
+MAX_TOOL_RESULTS_PER_MESSAGE_CHARS = int(os.environ.get("HARNESS_MAX_GROUP_CHARS", "200000"))
+
+#: How much of a persisted result the model still gets to see inline.
+PREVIEW_BYTES = 2_000
 
 #: Session transcripts, one JSONL file per session.
 RUNS_DIR = ROOT / "runs"
@@ -234,13 +255,39 @@ MAX_ATTACHED_FILE_TOKENS = 2_500
 MAX_PLAN_ATTEMPTS = 2
 
 
-def approx_tokens(text: str) -> int:
-    """Rough token count at 4 chars/token.
+def bytes_per_token_for(text: str) -> int:
+    """Chars per token for this content: 2 for JSON, 4 for everything else.
+
+    Dense JSON is mostly single-character tokens — `{`, `}`, `:`, `,`, `"` — so it runs
+    near two chars per token where prose runs near four. The distinction is load-bearing
+    rather than cosmetic: at 4, a 100 KB payload estimates to 25k tokens when it is really
+    closer to 50k, and the results that most need catching by a size gate are exactly the
+    ones that would be waved through.
+
+    `raw_decode` rather than `json.loads` because the MCP layer appends a derived-totals
+    block after the JSON (`mcp.py`), so a strict parse would answer "not JSON" for our
+    largest results — the precise case this exists to get right.
+    """
+    head = text.lstrip()
+    if not head.startswith(("{", "[")):
+        return 4
+    try:
+        json.JSONDecoder().raw_decode(head)
+    except ValueError:
+        return 4
+    return 2
+
+
+def approx_tokens(text: str, bytes_per_token: int = 4) -> int:
+    """Rough token count, 4 chars/token by default.
 
     Deliberately an estimate: budgets are enforced per section on every write, and a
     `count_tokens` round trip per section would cost more than the precision is worth.
+
+    Pass `bytes_per_token_for(text)` when the content type is unknown and the answer
+    drives a threshold. The default stays 4 so callers measuring prose are unaffected.
     """
-    return len(text) // 4
+    return len(text) // max(1, bytes_per_token)
 
 TRUNCATION_NOTICE = (
     "> [index truncated: it exceeded its line or byte cap] Entries were cut from the end "

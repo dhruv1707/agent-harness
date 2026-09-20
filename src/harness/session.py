@@ -16,6 +16,7 @@ from typing import Any
 
 from .compaction import summarize
 from .config import AGENT_DIR, MAX_TURNS, MODEL, RUNS_DIR
+from .budget import ContentReplacementState
 from .loop import LoopResult, LoopState, query_loop
 from .microcompact import MicrocompactState
 from .permissions import Asker, PermissionGate, PermissionPolicy, PlanState, default_asker
@@ -82,9 +83,15 @@ class AgentSession:
     #: submissions and the next turn would restore every result the last one cleared.
     _micro: MicrocompactState = field(init=False, repr=False, default=None)  # type: ignore[assignment]
 
+    #: Which oversized results were written to disk and what replaced them. Held here for
+    #: the same reason: once the model has seen a result the decision can never change,
+    #: and a per-submission home would forget it and send the full payload next time.
+    _budget: ContentReplacementState = field(init=False, repr=False, default=None)  # type: ignore[assignment]
+
     def __post_init__(self) -> None:
         self._plan_state = PlanState(active=self.plan)
         self._micro = MicrocompactState()
+        self._budget = ContentReplacementState()
 
     _gate: PermissionGate | None = field(default=None, init=False, repr=False)
     _active: bool = field(default=False, init=False, repr=False)
@@ -97,6 +104,11 @@ class AgentSession:
     def microcompaction(self) -> MicrocompactState:
         """What microcompaction has cleared this session, for reporting."""
         return self._micro
+
+    @property
+    def size_gate(self) -> ContentReplacementState:
+        """What the size gate has persisted this session, for reporting."""
+        return self._budget
 
     @property
     def gate(self) -> PermissionGate:
@@ -214,7 +226,9 @@ class AgentSession:
             )
         self.transcript.append(opening, turn=0, meta=self.root_meta or None)
 
-        state = LoopState(transcript=self.transcript, micro=self._micro)
+        state = LoopState(
+            transcript=self.transcript, micro=self._micro, budget=self._budget
+        )
         # Opening a session — or resuming, or branching — is a rebuild point: walk the
         # tree once here, then append for the rest of the run.
         state.project()

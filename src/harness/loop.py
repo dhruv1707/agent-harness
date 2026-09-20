@@ -12,6 +12,7 @@ until then the loop fails loudly rather than guessing.
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -24,6 +25,9 @@ from .config import (
     MAX_PLAN_ATTEMPTS,
     MAX_TURNS,
     MODEL,
+    RUNS_DIR,
+    approx_tokens,
+    bytes_per_token_for,
     compact_threshold,
 )
 from .events import (
@@ -36,6 +40,9 @@ from .events import (
     ToolCallStarted,
     normalize,
 )
+from .budget import ContentReplacementState
+from .budget import apply as apply_budget
+from .budget import reapply as reapply_budget
 from .executor import StreamingToolExecutor
 from .microcompact import MicrocompactState, maybe_microcompact, reapply
 from .permissions import PermissionGate
@@ -44,6 +51,36 @@ from .session_memory import MemoryGate, SessionMemory, Writer
 from .attachments import from_lineage, render_boundary
 from .tools import ToolContext, ToolRegistry
 from .transcript import Transcript
+
+
+def estimate_step(step: dict) -> int:
+    """Rough token cost of one step, by content type.
+
+    Tool results are usually JSON and bill at about two chars per token, where prose runs
+    near four; measuring them at four halves the answer for exactly the steps that weigh
+    most. `thought` steps are counted by their signature, which is a large base64 blob
+    that is replayed verbatim and is not free.
+    """
+    kind = step.get("type")
+    if kind == "function_result":
+        body = " ".join(
+            block.get("text", "")
+            for block in step.get("result") or []
+            if isinstance(block, dict)
+        )
+        return approx_tokens(body, bytes_per_token_for(body))
+    if kind in ("user_input", "model_output"):
+        body = " ".join(
+            block.get("text", "")
+            for block in step.get("content") or []
+            if isinstance(block, dict)
+        )
+        return approx_tokens(body)
+    if kind == "thought":
+        return approx_tokens(str(step.get("signature") or ""))
+    if kind == "function_call":
+        return approx_tokens(json.dumps(step.get("arguments") or {}), 2)
+    return 0
 
 
 @dataclass(frozen=True)
@@ -120,6 +157,16 @@ class LoopState:
     #: everything between submissions and restore results the last one cleared.
     micro: MicrocompactState = field(default_factory=MicrocompactState)
 
+    #: Which oversized results have been written to disk and what the model was shown in
+    #: their place. Shared with the `Session` for the same reason as `micro`: once the
+    #: model has seen a result, that decision must outlive the submission that made it.
+    budget: ContentReplacementState = field(default_factory=ContentReplacementState)
+
+    #: How many steps went into the last request. Everything after this index was added
+    #: since, so its size has to be estimated rather than read off the response — see
+    #: `note_usage`.
+    sent_through: int = 0
+
 
     # ---- the projection ------------------------------------------------------
 
@@ -131,19 +178,30 @@ class LoopState:
         fourth rebuild point but does not come through here — it rewrites the projection
         rather than re-deriving it.
 
-        The tree still holds every tool result in full, so a plain walk would undo any
-        clearing microcompaction has done. Re-applying the cleared set keeps the rebuild
-        faithful to what the model was last shown.
+        The tree still holds every tool result in full, so a plain walk would undo both
+        the size gate and any clearing microcompaction has done. Re-applying keeps the
+        rebuild faithful to what the model was last shown.
         """
-        self.messages = reapply(self.transcript.steps(), self.micro)
+        self.messages = reapply(reapply_budget(self.transcript.steps(), self.budget), self.micro)
 
     def note_usage(self) -> None:
-        """Take the context size and cache hit off the last response.
+        """Work out how full the context actually is, after a response.
 
-        Both numbers arrive free in every response. Called at each point a turn can end,
-        so `cache_history` has one row per model call.
+        An exact baseline plus an estimate of the rest. `total_input_tokens` is exact but
+        describes the request we *sent*; everything recorded since — the model's own
+        output, and above all this turn's tool results — is already in the context and
+        will be in the next request, so it has to be counted too.
+
+        Reading the response alone was the bug this replaces. `note_usage` runs after the
+        turn's results are recorded, so the count excluded the single largest thing in the
+        context and every threshold built on it fired late.
+
+        On Gemini `total_cached_tokens` is the cached *part* of `total_input_tokens`, not
+        a separate bucket, so the two are never added — that would double-count the cache.
         """
-        self.context_tokens = self.usage.get("total_input_tokens", self.context_tokens)
+        sent = self.usage.get("total_input_tokens", self.context_tokens)
+        pending = self.messages[self.sent_through :]
+        self.context_tokens = sent + sum(estimate_step(step) for step in pending)
         self.cache_history.append(
             (
                 self.turn,
@@ -218,14 +276,38 @@ async def query_loop(
             return LoopResult("max_turns", state.turn, last_text, state.usage)
 
         state.turn += 1
-        # Before the request is assembled, not after: the whole point is to shrink what
-        # this turn sends. Reads the tree for timestamps, rewrites only the projection.
-        cleared = maybe_microcompact(
-            state.messages, state.transcript.path_to_root(), state.micro
+        # Both of these run before the request is assembled — the whole point is to shrink
+        # what this turn sends — and both rewrite only the projection, never the tree.
+        #
+        # The size gate goes first: it decides what a *new* result may occupy, while
+        # microcompaction clears results that have gone stale, which means long since
+        # sent. They cannot fight over the same step, because a result the gate may still
+        # act on is by definition one the model has never seen.
+        nodes = state.transcript.path_to_root()
+        state.messages = apply_budget(
+            state.messages,
+            nodes,
+            state.budget,
+            registry=registry,
+            runs_dir=state.transcript.path.parent
+            if state.transcript.path is not None
+            else RUNS_DIR,
+            session_id=state.transcript.session_id,
         )
+        # Re-assert what microcompaction has already cleared. The size gate re-applies its
+        # replacements verbatim every turn, which would otherwise put a preview back over a
+        # result that was cleared for age — undoing the clearing, and re-counting the
+        # preview's bytes as reclaimed on every turn after. Stale beats persisted.
+        state.messages = reapply(state.messages, state.micro)
+
+        cleared = maybe_microcompact(state.messages, nodes, state.micro)
         if cleared is not None:
             state.messages = cleared
+
         runtime = build_runtime(state, prompt, registry, model)
+        # Watermark for `note_usage`: everything appended past here arrived after the
+        # request went out, so the response's token count cannot account for it.
+        state.sent_through = len(runtime.input)
         # A fresh executor per turn: a turn's ledger must not leak into the next one.
         turn_ctx = replace(ctx or ToolContext(session_id="local"), turn=state.turn)
         executor = StreamingToolExecutor(registry, ctx=turn_ctx, gate=gate)

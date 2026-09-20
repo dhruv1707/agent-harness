@@ -370,6 +370,13 @@ def _cmd_run(args, *, role_name: str | None = None) -> int:
     verdict = None
     usage = f" usage={result.usage}" if result.usage else ""
     print(f"[{result.stop_reason}] turns={result.turns}{usage}", file=sys.stderr)
+    gate = session.size_gate
+    if gate.persisted:
+        print(
+            f"[size-gate] {gate.persisted} oversized result(s) written to disk, "
+            f"{gate.reclaimed_chars:,} chars kept out of context",
+            file=sys.stderr,
+        )
     micro = session.microcompaction
     if micro.clearings:
         print(

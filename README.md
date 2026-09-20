@@ -176,6 +176,14 @@ combines the researchers' findings into a single brief for the implementer, and 
 verifier finds problems, sends the work back to the implementer once. Children cannot start
 children of their own.
 
+**Tool result size gate.** Ad-platform listings are large — a single creative-tag listing
+runs to 284 KB, a quarter of the context budget in one step. Any result over ~50k characters
+is written to a file under `runs/` and the model is sent a short preview plus a handle it can
+read back with `read_tool_result`. A round of parallel calls that together exceed ~200k is
+trimmed the same way, largest first. A tool can declare a lower limit or opt out. Once the
+model has been shown a result, what it was shown never changes — altering it afterwards would
+invalidate the provider's cache for everything following it.
+
 **Microcompaction.** Tool results are about 92% of the bytes in a long run, and most go
 stale quickly — a listing pulled twenty turns ago is rarely read again. Microcompaction
 replaces old tool results with a short placeholder, keeping the five most recent. It runs

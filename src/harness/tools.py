@@ -23,7 +23,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, get_type_hints
 
-from .config import AGENT_DIR, AGENT_TIMEOUT_SECONDS, RUNS_DIR
+from .config import (
+    AGENT_DIR,
+    AGENT_TIMEOUT_SECONDS,
+    DEFAULT_MAX_RESULT_SIZE_CHARS,
+    RUNS_DIR,
+)
 from .permissions import PlanState
 
 #: Memory files the agent may append to. Everything else under agent/memory/ is curated
@@ -149,6 +154,14 @@ class Tool:
     timeout: float | None = None
     interrupt_behavior: InterruptBehavior = "cancel"
     wants_context: bool = False
+    #: Chars of result this tool may put in the context before the rest is written to a
+    #: file and replaced by a preview. `None` opts out of persistence entirely, which is
+    #: right for a tool that reads persisted output: persisting its result would hand the
+    #: model a path to the thing it just asked to be read.
+    #:
+    #: The effective ceiling is the lower of this and the global default, so declaring a
+    #: number can only tighten the gate, never loosen it.
+    max_result_chars: int | None = DEFAULT_MAX_RESULT_SIZE_CHARS
 
     def declaration(self) -> dict:
         """The wire shape the Interactions API expects in `tools`."""
@@ -172,6 +185,7 @@ def tool(
     read_only: bool,
     timeout: float | None = None,
     interrupt_behavior: InterruptBehavior = "cancel",
+    max_result_chars: int | None = DEFAULT_MAX_RESULT_SIZE_CHARS,
 ) -> Callable[[Callable], Tool]:
     """Turn a function into a Tool. The docstring becomes the model-facing description.
 
@@ -192,6 +206,7 @@ def tool(
             timeout=timeout,
             interrupt_behavior=interrupt_behavior,
             wants_context=_wants_context(fn),
+            max_result_chars=max_result_chars,
         )
 
     return wrap
@@ -343,6 +358,38 @@ def submit_plan(ctx: ToolContext, plan: str) -> str:
     )
 
 
+@tool(concurrency_safe=True, read_only=True, max_result_chars=None)
+def read_tool_result(ctx: ToolContext, call_id: str, offset: int = 0, limit: int = 20000) -> str:
+    """Read back a tool result that was too large to keep in the conversation.
+
+    When a result is replaced by a `<persisted-output>` block, the full text is on disk.
+    This reads a slice of it. Ask for the part you need rather than the whole thing — the
+    reason it was moved out is that all of it does not fit.
+
+    Args:
+        call_id: The id in the persisted-output block.
+        offset: Character offset to start from.
+        limit: How many characters to return.
+    """
+    from .budget import results_dir
+
+    path = results_dir(ctx.runs_dir, ctx.session_id) / f"{call_id}.txt"
+    if not path.exists():
+        return f"no persisted result for call_id {call_id!r}"
+
+    text = path.read_text(encoding="utf-8")
+    limit = max(1, min(limit, DEFAULT_MAX_RESULT_SIZE_CHARS))
+    chunk = text[offset : offset + limit]
+    end = offset + len(chunk)
+    tail = (
+        f"\n[… {len(text) - end:,} more chars; "
+        f"read_tool_result(call_id={call_id!r}, offset={end})]"
+        if end < len(text)
+        else ""
+    )
+    return f"[{call_id} chars {offset}-{end} of {len(text):,}]\n{chunk}{tail}"
+
+
 @tool(concurrency_safe=False, read_only=False, interrupt_behavior="block")
 def append_run_log(ctx: ToolContext, text: str) -> str:
     """Append a line to this run's log. Use it to record a decision worth keeping.
@@ -415,6 +462,7 @@ def default_registry() -> ToolRegistry:
         [
             list_memory,
             read_memory,
+            read_tool_result,
             append_memory,
             append_run_log,
             submit_plan,
