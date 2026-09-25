@@ -1,9 +1,8 @@
 """Permission: a runtime object, not a boolean.
 
-Chapter 4's constraint is that three answers are needed, not two — *"if an agent cannot
-distinguish 'I can do this,' 'I cannot do this,' and 'I must ask,' it should not touch a
-terminal."* `ask` is what makes an interactive harness possible at all, and it is the state
-you cannot retrofit onto a bool.
+Three answers are needed, not two. An agent that cannot distinguish "I may do this", "I
+may not do this" and "I must ask" should not be given a terminal. `ask` is what makes an
+interactive harness possible at all, and it is the state you cannot retrofit onto a bool.
 
 The model proposes; the runtime authorizes.
 """
@@ -214,8 +213,8 @@ def default_asker() -> Asker | None:
 class PermissionGate:
     """Evaluates policy, asks when needed, and remembers what it decided.
 
-    Decisions are memoized per `call_id`, which is the chapter's invariant: *"deny is
-    sticky for this tool_use_id — no silent retry to allow."*
+    Decisions are memoized per `call_id`, so a deny is sticky for that call — there is no
+    silent retry that turns a refusal into an allow.
     """
 
     def __init__(

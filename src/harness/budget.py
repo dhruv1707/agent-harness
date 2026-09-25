@@ -185,9 +185,9 @@ def ceiling_for(name: str, registry: Any) -> int | None:
     """Chars this tool's results may occupy, or None if it opts out of persistence.
 
     A tool declaring a limit gets the lower of its own and the global one; a tool
-    declaring `None` is never persisted at any size. `read_tool_result` opts out for the
-    reason the chapter's Read tool does: persisting the thing that reads persisted output
-    sends the model round the same loop again.
+    declaring `None` is never persisted at any size. `read_tool_result` opts out, because
+    persisting the thing that reads persisted output sends the model round the same loop
+    again.
     """
     try:
         declared = getattr(registry.get(name), "max_result_chars", DEFAULT_MAX_RESULT_SIZE_CHARS)
@@ -226,11 +226,11 @@ def apply(
 ) -> list[dict]:
     """Enforce both gates over the projection. Returns new messages; the input is untouched.
 
-    Marking and replacement happen together. The chapter marks unselected candidates as
-    seen synchronously but selected ones only after an async write, because a mismatch
-    between the two would classify a result as frozen while its preview was already in
-    flight. Our write is synchronous inside a single request build, so the window in which
-    they could disagree does not exist.
+    Marking and replacement happen together. If `seen` could gain an id before
+    `replacements` did, that result would read as frozen and go out in full while its
+    preview was already in flight — two different bodies for one call, and the cache gone.
+    An async write would open exactly that window; ours is synchronous inside a single
+    request build, so it cannot.
     """
     out = list(messages)
     directory = results_dir(runs_dir, session_id)

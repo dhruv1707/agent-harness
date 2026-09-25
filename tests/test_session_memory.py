@@ -62,7 +62,7 @@ def test_the_section_budgets_bound_the_whole_brief():
 
     The per-section budgets sum below the whole-brief cap, with room left for the headings,
     so a shed path would be unreachable. Widen a budget or add a section and this fails —
-    which is the signal to reinstate it, as the book's nine-section template requires.
+    which is the signal to reinstate it.
     """
     assert set(SECTION_BUDGETS) == set(SECTIONS), "every section needs a budget"
     assert sum(SECTION_BUDGETS.values()) < MAX_SESSION_MEMORY_TOKENS

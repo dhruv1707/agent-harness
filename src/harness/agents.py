@@ -1,9 +1,9 @@
 """Child agents: one role, one session, one transcript, one outcome.
 
-A single agent that researches, decides, writes and then checks its own work is the
-arrangement the chapter warns about — *"'I changed code' and 'the change is correct' are
-separated by a wide river, and models are good at building paper bridges over it."* We have
-watched it here: a brief invented eight of nine hooks and the run reported success.
+A single agent that researches, decides, writes and then checks its own work grades its
+own homework: "I did the work" and "the work is correct" are different claims, and a model
+asked for both will bridge the gap rather than report it. We have watched it here — a brief
+invented eight of nine hooks and the run reported success.
 
 So the work splits into roles, each its own `AgentSession` over its own `Transcript`. Two
 things follow, and only the first is obvious.
@@ -252,7 +252,7 @@ class AgentPool:
     def _drift(self, session: AgentSession) -> str | None:
         """Refuse a fork whose cached prefix no longer matches its parent's.
 
-        The chapter's rule is that `CacheSafeParams` must align or the fork is refused.
+        The cacheable parameters must align byte for byte or the fork is refused.
         Nothing enforced it here: a control-plane file edited mid-run, or a tool registered
         after the pool was built, would silently drop every child to paying full price and
         the only symptom would be a usage line nobody reads.

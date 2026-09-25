@@ -188,7 +188,7 @@ def test_api_error_returns_without_retry():
 
     assert result.stop_reason == "api_error"
     assert "quota" in result.error
-    assert len(client.requests) == 1, "chapter 3: API errors return directly, no retry"
+    assert len(client.requests) == 1, "API errors return directly, no retry"
 
 
 def test_transport_exception_is_reported_not_raised():
@@ -395,9 +395,9 @@ def test_the_request_input_matches_the_tree_walk_after_a_real_run():
 
 
 def test_a_turn_will_not_end_while_children_are_still_working(tmp_path):
-    """The chapter calls this "leaked cleanup" and answers it by evicting. Waiting is the
-    better trade: the work is already paid for, and a coordinator that forgets to collect
-    would otherwise throw away three researchers it just spent two minutes on."""
+    """Evicting them would leak the work instead. Waiting is the better trade: it is
+    already paid for, and a coordinator that forgets to collect would otherwise throw
+    away three researchers it just spent two minutes on."""
     from harness.agents import AgentPool, ChildOutcome
 
     class Finished(AgentPool):

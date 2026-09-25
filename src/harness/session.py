@@ -193,7 +193,7 @@ class AgentSession:
         """Open a turn: record the user step, then run the loop until it terminates.
 
         One turn at a time. New input cannot interleave with a turn already in flight —
-        that is the session half of chapter 4's interrupt semantics. The executor half
+        that is the session half of the interrupt semantics. The executor half
         already holds: `cancel()` awaits any `interrupt_behavior="block"` tool before the
         loop returns, so nothing is still writing when this method exits.
         """

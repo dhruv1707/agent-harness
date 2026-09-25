@@ -207,9 +207,8 @@ def build_effective_system_prompt(
             `append` still apply — an override narrows the constitution, it does not
             abolish it.
         agent: A role/job description layered on top of the stack. Never replaces it.
-            Note this follows Claude Code's *proactive-mode* agent semantics (append,
-            don't replace). Claude Code's own `custom` slot replaces the base wholesale
-            — that behaviour is what `override` above provides here.
+            It appends rather than replaces, so governance and the memory index survive
+            a role. Replacing the base wholesale is what `override` above is for.
         append: Always last, always after the cache breakpoint.
     """
     run_context = run_context or RunContext()

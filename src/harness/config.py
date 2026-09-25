@@ -1,7 +1,7 @@
 """Constants for the control plane.
 
-The entrypoint caps come from Claude Code's memory governance: an index file is loaded on
-every single run, so if it is allowed to grow it quietly drags context down forever.
+The entrypoint caps exist because an index file is loaded on every single run, so if it is
+allowed to grow it quietly drags context down forever.
 """
 
 import json

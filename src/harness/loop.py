@@ -5,8 +5,8 @@ declarations, and the conversation derived by walking the transcript from its he
 the root. Nothing is carried implicitly between turns and nothing is stored server-side, so
 the loop can be pointed at any node in the tree and will simply build a different request.
 
-Termination is deliberate and enumerated. Retry and recovery branches belong to chapter 6;
-until then the loop fails loudly rather than guessing.
+Termination is deliberate and enumerated. There is no retry or recovery policy yet, so the
+loop fails loudly rather than guessing.
 """
 
 from __future__ import annotations
@@ -409,17 +409,18 @@ async def query_loop(
         flush_text()
 
         if stream_error is not None:
-            # Per chapter 3: API errors return directly. No retry policy exists yet.
+            # API errors return directly. No retry policy exists yet, and inventing one
+            # silently is worse than stopping where the failure happened.
             await _close_ledger(state, executor)
             await _brief_before_leaving(state, client, model, writer)
             state.stop_reason = "api_error"
             return LoopResult("api_error", state.turn, last_text, state.usage, stream_error)
 
         if executor.issued == 0:
-            # A turn may not end while children are still working. The chapter calls the
-            # alternative "leaked cleanup" and answers it by evicting; waiting is the
-            # better trade, because the work is already paid for and a coordinator that
-            # forgets to collect would otherwise silently throw away three researchers.
+            # A turn may not end while children are still working. The alternative is to
+            # evict them, but waiting is the better trade: the work is already paid for,
+            # and a coordinator that forgets to collect would otherwise silently throw
+            # away three researchers.
             #
             # This is the one place the loop records a `user_input` step mid-run — every
             # other `record` writes model output, a thought, or a tool call. It still goes
@@ -501,8 +502,8 @@ async def maybe_compact(
 ) -> bool:
     """Summarize the old history and rebuild the working context from it.
 
-    Returns True if a boundary was written. The circuit breaker is the chapter's hard-won
-    lesson: "You may fail, but you may not fail infinitely without memory."
+    Returns True if a boundary was written. The circuit breaker exists because failing is
+    survivable but failing forever without memory is not.
     """
     if state.compact_failures >= MAX_CONSECUTIVE_COMPACT_FAILURES:
         return False

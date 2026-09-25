@@ -1,11 +1,11 @@
 """Compaction: a controlled reboot, not a chat recap.
 
-The chapter's framing is the important part — *"Old context is translated into new
-operating substrate."* Four phases:
+Old context is translated into new operating substrate rather than summarized for a
+reader. Four phases:
 
 1. **Pre-summary cleaning.** Expensive, low-summary-value content is replaced by labels
-   before the summarization call sees it. Claude Code writes `[image]` and `[document]`;
-   ours are `[tool result: …]`, `[transcript: …]` and `[thought]`. This copy is
+   before the summarization call sees it: `[tool result: …]`, `[transcript: …]` and
+   `[thought]`. This copy is
    throwaway — the real transcript is never rewritten.
 2. **Summarize.** One model call, no tools, filling the session-memory template. If that
    call itself hits prompt-too-long, the head is truncated and it retries once.

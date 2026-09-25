@@ -10,14 +10,15 @@ calls without reordering work around a call that cannot tolerate it — `[read, 
 will not race both reads around the write.
 
 **The runtime authorizes, the model only proposes.** Every call passes the permission gate
-after partitioning and before execution, matching Claude Code's order (`runTools()` →
-`partitionToolCalls()` → per-tool `runToolUse()`, which wraps permission around the call).
+after partitioning and before execution, so a call that is about to run has already been
+authorized — the gate is never something a tool can start ahead of.
 
 **A sibling's failure does not stop its siblings.** Each call is its own task; one raising
-or being denied leaves the others running. That is deliberate and matches chapter 4's
-matrix — *"one tool fails in parallel batch … keep others"* — rather than an absence. A
-tool that must not run after a sibling failed does not exist yet; when one does, it needs a
-way to say so, not a blanket fail-fast.
+or being denied leaves the others running. That is a decision, not an oversight: the calls
+in a batch are independent by construction, and killing three good reads because a fourth
+was denied wastes work the model will only ask for again. A tool that must not run after a
+sibling failed does not exist yet; when one does, it needs a way to say so, not a blanket
+fail-fast.
 
 **The ledger always closes.** Every submitted call produces exactly one outcome, whether it
 succeeded, was denied, raised, timed out, was never started, or was cancelled — each with a

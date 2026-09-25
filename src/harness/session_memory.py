@@ -1,9 +1,8 @@
 """Session memory: an operational continuation brief.
 
-Not a second copy of the conversation. The chapter is explicit that this "distills the
-session into an operational continuation brief" — status, pitfalls, what changed, and the
-next actionable step. A transcript tells you what was said; this tells you where things
-stand.
+Not a second copy of the conversation. This distills a session into an operational
+continuation brief — status, pitfalls, what changed, and the next actionable step. A
+transcript tells you what was said; this tells you where things stand.
 
 Writing costs a model call, so it happens at deliberate points rather than every turn.
 `MemoryGate` owns that decision and nothing else does.
@@ -115,8 +114,8 @@ class SessionMemory:
         There is deliberately no whole-brief shedding step. `SECTION_BUDGETS` sums to 9,000
         against a 12,000 total, so the arithmetic makes it unreachable, and
         `test_the_section_budgets_bound_the_whole_brief` fails if that stops being true.
-        The book's nine-section template is where shedding earns its place; ours does not,
-        so shipping the branch would be shipping dead code.
+        A larger template would need one; ours cannot reach the ceiling, so shipping the
+        branch would be shipping dead code.
         """
         return SessionMemory(
             sections={
@@ -202,8 +201,8 @@ class MemoryGate:
 
 # ---- the writer --------------------------------------------------------------
 #
-# A plain callable so chapter 7 can replace the inline model call with a forked sub-agent
-# without touching the loop.
+# A plain callable so the inline model call can be swapped for a forked sub-agent without
+# touching the loop.
 
 Writer = Callable[[list[dict], "SessionMemory | None"], "SessionMemory"]
 

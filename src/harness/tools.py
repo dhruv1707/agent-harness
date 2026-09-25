@@ -245,8 +245,8 @@ class ToolRegistry:
 
 # ---- the first real tools ---------------------------------------------------
 #
-# These close chapter 2's third memory tier: MEMORY.md has been pointing at topic files
-# that nothing could actually open.
+# These close the third memory tier: MEMORY.md has been pointing at topic files that
+# nothing could actually open.
 
 
 def _resolve_memory(memory_dir: Path, name: str) -> Path:

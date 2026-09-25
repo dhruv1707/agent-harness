@@ -148,7 +148,7 @@ def test_always_persists_for_the_session():
 
 
 def test_deny_is_sticky_for_a_call_id():
-    """Chapter 4: deny is sticky for this tool_use_id — no silent retry to allow."""
+    """Deny is sticky for this call id — no silent retry that turns it into an allow."""
     answers = iter(["n", "y"])
     gate = PermissionGate(
         PermissionPolicy(ask=("write_thing",)), asker=lambda request: next(answers)

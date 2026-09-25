@@ -1,6 +1,6 @@
 """Child agents: isolation, the shared prefix, and a ledger that always closes.
 
-The chapter's invariants, as assertions: fork does not break prompt cache, sharing is
+The invariants, as assertions: a fork does not break the prompt cache, sharing is
 explicit, parent dies child dies, and every spawn eventually accounts for itself.
 """
 
@@ -27,7 +27,7 @@ def run(coro):
 
 
 def test_a_role_does_not_change_the_cached_prefix():
-    """The chapter's first invariant. A role rides in the opening user turn precisely so
+    """The first invariant. A role rides in the opening user turn precisely so
     the cacheable bytes stay identical — putting it in the `agent` layer would push
     governance and the MCP guidance below it and re-bill both once per role."""
     parent = build_effective_system_prompt()
@@ -239,7 +239,7 @@ def test_every_shipped_role_has_a_description_and_a_policy():
 
 # ---- the subagent failure matrix ----------------------------------------------
 #
-# The chapter's six rows, as assertions. Three were already true; three were not.
+# The subagent failure modes, as assertions. Three were already true; three were not.
 
 
 def test_spawning_does_not_block_the_parent(tmp_path):
@@ -271,8 +271,8 @@ def test_pending_and_ready_describe_different_things(tmp_path):
 
 
 def test_cache_drift_refuses_the_fork(tmp_path):
-    """The chapter's rule is that the cache-safe parameters must align or the fork is
-    refused. Nothing enforced it: a control-plane file edited mid-run would silently drop
+    """The cache-safe parameters must align or the fork is refused.
+    Nothing enforced it: a control-plane file edited mid-run would silently drop
     every child to paying full price, and the only symptom is a usage line."""
     async def scenario():
         p = pool(tmp_path, parent_prefix="a-prefix-that-no-longer-matches")

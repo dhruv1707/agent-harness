@@ -3,8 +3,8 @@
 The Gemini Interactions API can declare an MCP server natively — `{"type": "mcp_server",
 "url": ...}` — and call it itself. We deliberately do not. Those calls execute on Google's
 side and arrive in our stream as `mcp_server_tool_call` steps *after the fact*, so the
-permission gate never gets a vote. That contradicts chapter 4's whole premise: the model
-proposes, the runtime authorizes.
+permission gate never gets a vote. That inverts the rule the whole runtime is built on:
+the model proposes, the runtime authorizes.
 
 So the harness is the MCP client. Every remote tool is registered as an ordinary function
 tool named `mcp__<server>__<tool>`, which means it flows through the same permission gate,
